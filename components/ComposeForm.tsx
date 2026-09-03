@@ -4,6 +4,7 @@ import { useState } from "react";
 import { EmailTag, Status } from "./types";
 import RecipientSection from "./recipients/RecipientSection";
 import StatusBanner from "./StatusBanner";
+import EmailPreview from "./EmailPreview";
 
 const SES_RECIPIENT_LIMIT = 50;
 
@@ -57,7 +58,6 @@ export default function ComposeForm() {
     const ccEmails = cc.map((t) => t.email);
     const bccEmails = bcc.map((t) => t.email);
 
-    // Reserve slots for "to" and "cc" on every batch; fill the rest with bcc.
     const reservedSlots = toEmails.length + ccEmails.length;
     const bccChunkSize = Math.max(SES_RECIPIENT_LIMIT - reservedSlots, 1);
 
@@ -129,118 +129,122 @@ export default function ComposeForm() {
   const totalRecipients = to.length + cc.length + bcc.length;
 
   return (
-    <>
-      <form
-        onSubmit={handleSubmit}
-        className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden"
-      >
-        <div className="p-6 space-y-5">
-          <RecipientSection
-            to={to}
-            cc={cc}
-            bcc={bcc}
-            onAddTo={addTag(setTo)}
-            onRemoveTo={removeTag(setTo)}
-            onAddCc={addTag(setCc)}
-            onRemoveCc={removeTag(setCc)}
-            onAddBcc={addTag(setBcc)}
-            onRemoveBcc={removeTag(setBcc)}
-            onListLoad={handleListLoad}
-          />
-
-          <div className="border-t border-slate-100" />
-
-          {/* Subject */}
-          <div>
-            <label
-              htmlFor="subject"
-              className="block text-sm font-semibold text-slate-600 mb-1.5 tracking-wide uppercase"
-            >
-              Subject <span className="text-red-500">*</span>
-            </label>
-            <input
-              id="subject"
-              type="text"
-              required
-              value={subject}
-              onChange={(e) => setSubject(e.target.value)}
-              placeholder="Email subject line"
-              className="w-full px-3.5 py-2.5 border border-slate-200 rounded-lg text-sm text-slate-800 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-shadow"
+    <div className="grid grid-cols-1 gap-8 xl:grid-cols-[minmax(0,1fr)_minmax(360px,460px)]">
+      <div>
+        <form
+          onSubmit={handleSubmit}
+          className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden"
+        >
+          <div className="p-6 space-y-5">
+            <RecipientSection
+              to={to}
+              cc={cc}
+              bcc={bcc}
+              onAddTo={addTag(setTo)}
+              onRemoveTo={removeTag(setTo)}
+              onAddCc={addTag(setCc)}
+              onRemoveCc={removeTag(setCc)}
+              onAddBcc={addTag(setBcc)}
+              onRemoveBcc={removeTag(setBcc)}
+              onListLoad={handleListLoad}
             />
+
+            <div className="border-t border-slate-100" />
+
+            {/* Subject */}
+            <div>
+              <label
+                htmlFor="subject"
+                className="block text-sm font-semibold text-slate-600 mb-1.5 tracking-wide uppercase"
+              >
+                Subject <span className="text-red-500">*</span>
+              </label>
+              <input
+                id="subject"
+                type="text"
+                required
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
+                placeholder="Email subject line"
+                className="w-full px-3.5 py-2.5 border border-slate-200 rounded-lg text-sm text-slate-800 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-shadow"
+              />
+            </div>
+
+            {/* Body */}
+            <div>
+              <label
+                htmlFor="body"
+                className="block text-sm font-semibold text-slate-600 mb-1.5 tracking-wide uppercase"
+              >
+                Message Body <span className="text-red-500">*</span>
+              </label>
+              <textarea
+                id="body"
+                required
+                value={body}
+                onChange={(e) => setBody(e.target.value)}
+                placeholder="Write your message here..."
+                rows={10}
+                className="w-full px-3.5 py-2.5 border border-slate-200 rounded-lg text-sm text-slate-800 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-shadow resize-y leading-relaxed"
+              />
+            </div>
           </div>
 
-          {/* Body */}
-          <div>
-            <label
-              htmlFor="body"
-              className="block text-sm font-semibold text-slate-600 mb-1.5 tracking-wide uppercase"
+          {/* Footer */}
+          <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between gap-4">
+            <div className="text-xs text-slate-400">
+              {totalRecipients > 0 && (
+                <span>
+                  Sending to{" "}
+                  <strong className="text-slate-600">{totalRecipients}</strong>{" "}
+                  recipient{totalRecipients !== 1 ? "s" : ""}
+                  {loading && progress && progress.total > 1 && (
+                    <> &middot; batch {progress.sent}/{progress.total}</>
+                  )}
+                </span>
+              )}
+            </div>
+            <button
+              type="submit"
+              disabled={loading}
+              className="flex items-center gap-2 px-6 py-2.5 bg-[#ffc627] hover:bg-[#e6ae22] disabled:opacity-60 disabled:cursor-not-allowed text-black text-sm font-semibold rounded-lg shadow-sm transition-colors"
             >
-              Message Body <span className="text-red-500">*</span>
-            </label>
-            <textarea
-              id="body"
-              required
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-              placeholder="Write your message here..."
-              rows={10}
-              className="w-full px-3.5 py-2.5 border border-slate-200 rounded-lg text-sm text-slate-800 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-shadow resize-y leading-relaxed"
-            />
+              {loading ? (
+                <>
+                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                  </svg>
+                  {progress && progress.total > 1
+                    ? `Sending batch ${progress.sent}/${progress.total}…`
+                    : "Sending…"}
+                </>
+              ) : (
+                <>
+                  <svg
+                    className="w-4 h-4"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5"
+                    />
+                  </svg>
+                  Send Email
+                </>
+              )}
+            </button>
           </div>
-        </div>
+        </form>
 
-        {/* Footer */}
-        <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between gap-4">
-          <div className="text-xs text-slate-400">
-            {totalRecipients > 0 && (
-              <span>
-                Sending to{" "}
-                <strong className="text-slate-600">{totalRecipients}</strong>{" "}
-                recipient{totalRecipients !== 1 ? "s" : ""}
-                {loading && progress && progress.total > 1 && (
-                  <> &middot; batch {progress.sent}/{progress.total}</>
-                )}
-              </span>
-            )}
-          </div>
-          <button
-            type="submit"
-            disabled={loading}
-            className="flex items-center gap-2 px-6 py-2.5 bg-[#ffc627] hover:bg-[#e6ae22] disabled:opacity-60 disabled:cursor-not-allowed text-black text-sm font-semibold rounded-lg shadow-sm transition-colors"
-          >
-            {loading ? (
-              <>
-                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-                </svg>
-                {progress && progress.total > 1
-                  ? `Sending batch ${progress.sent}/${progress.total}…`
-                  : "Sending…"}
-              </>
-            ) : (
-              <>
-                <svg
-                  className="w-4 h-4"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5"
-                  />
-                </svg>
-                Send Email
-              </>
-            )}
-          </button>
-        </div>
-      </form>
+        {status && <StatusBanner status={status} />}
+      </div>
 
-      {status && <StatusBanner status={status} />}
-    </>
+      <EmailPreview to={to} cc={cc} subject={subject} body={body} />
+    </div>
   );
 }
