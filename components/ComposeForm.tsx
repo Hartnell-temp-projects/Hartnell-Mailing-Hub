@@ -1,12 +1,14 @@
 "use client";
 
-import { useState } from "react";
-import { EmailTag, Status } from "./types";
+import { useEffect, useState } from "react";
+import { EmailTag, EmailTemplate, Status } from "./types";
 import RecipientSection from "./recipients/RecipientSection";
 import StatusBanner from "./StatusBanner";
 import EmailPreview from "./EmailPreview";
+import TemplateChooser from "./TemplateChooser";
 
 const SES_RECIPIENT_LIMIT = 50;
+const SAVED_TEMPLATES_KEY = "hartnell-mailer-saved-templates";
 
 function chunkArray<T>(arr: T[], size: number): T[][] {
   if (size <= 0) return [arr];
@@ -18,6 +20,7 @@ function chunkArray<T>(arr: T[], size: number): T[][] {
 }
 
 export default function ComposeForm() {
+  const [composeMode, setComposeMode] = useState<"choice" | "compose">("choice");
   const [to, setTo] = useState<EmailTag[]>([]);
   const [cc, setCc] = useState<EmailTag[]>([]);
   const [bcc, setBcc] = useState<EmailTag[]>([]);
@@ -26,12 +29,72 @@ export default function ComposeForm() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<Status>(null);
   const [progress, setProgress] = useState<{ sent: number; total: number } | null>(null);
+  const [templates, setTemplates] = useState<EmailTemplate[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(true);
+  const [templatesError, setTemplatesError] = useState<string | null>(null);
+  const [saveTemplateOpen, setSaveTemplateOpen] = useState(false);
+  const [templateName, setTemplateName] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadTemplates = async () => {
+      let savedTemplates: EmailTemplate[] = [];
+
+      try {
+        const stored = window.localStorage.getItem(SAVED_TEMPLATES_KEY);
+        let parsed: unknown = [];
+        if (stored) {
+          parsed = JSON.parse(stored);
+        }
+
+        if (Array.isArray(parsed)) {
+          savedTemplates = parsed.filter(isEmailTemplate);
+        }
+      } catch {
+        savedTemplates = [];
+      }
+
+      try {
+        const response = await fetch("/api/email-templates");
+        if (!response.ok) {
+          throw new Error("Built-in templates could not be loaded.");
+        }
+
+        const builtInTemplates = (await response.json()) as EmailTemplate[];
+        if (!cancelled) {
+          setTemplates([...builtInTemplates, ...savedTemplates]);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setTemplates(savedTemplates);
+          let message = "Built-in templates could not be loaded.";
+          if (error instanceof Error) {
+            message = error.message;
+          }
+          setTemplatesError(message);
+        }
+      } finally {
+        if (!cancelled) {
+          setTemplatesLoading(false);
+        }
+      }
+    };
+
+    void loadTemplates();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const addTag =
     (setter: React.Dispatch<React.SetStateAction<EmailTag[]>>) =>
     (email: string) => {
       setter((prev) => {
-        if (prev.some((t) => t.email === email)) return prev;
+        if (prev.some((t) => t.email === email)) {
+          return prev;
+        }
         return [...prev, { id: crypto.randomUUID(), email }];
       });
     };
@@ -45,6 +108,77 @@ export default function ComposeForm() {
   const handleListLoad = (emails: string[]) => {
     setTo([{ id: crypto.randomUUID(), email: "itrinfo@hartnell.edu" }]);
     setBcc(emails.map((email) => ({ id: crypto.randomUUID(), email })));
+  };
+
+  const resetDraft = () => {
+    setTo([]);
+    setCc([]);
+    setBcc([]);
+    setSubject("");
+    setBody("");
+    setStatus(null);
+  };
+
+  const handleStartFromScratch = () => {
+    resetDraft();
+    setComposeMode("compose");
+  };
+
+  const handleUseTemplate = (template: EmailTemplate) => {
+    resetDraft();
+    setSubject(template.subject);
+    setBody(template.content);
+    setComposeMode("compose");
+  };
+
+  const handleDeleteTemplate = (template: EmailTemplate) => {
+    if (template.source !== "saved") return;
+
+    const confirmed = window.confirm(`Delete the “${template.name}” template?`);
+    if (!confirmed) return;
+
+    const remainingTemplates = templates.filter((item) => item.id !== template.id);
+    const remainingSavedTemplates = remainingTemplates.filter(
+      (item) => item.source === "saved"
+    );
+
+    window.localStorage.setItem(
+      SAVED_TEMPLATES_KEY,
+      JSON.stringify(remainingSavedTemplates)
+    );
+    setTemplates(remainingTemplates);
+  };
+
+  const handleSaveTemplate = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const name = templateName.trim();
+
+    if (!name || !subject.trim() || !body.trim()) {
+      setStatus({
+        type: "error",
+        message: "Add a template name, subject, and message body before saving.",
+      });
+      return;
+    }
+
+    const newTemplate: EmailTemplate = {
+      id: crypto.randomUUID(),
+      name,
+      description: "Saved in this browser.",
+      subject,
+      content: body,
+      source: "saved",
+    };
+    const nextSavedTemplates = [
+      newTemplate,
+      ...templates.filter((template) => template.source === "saved"),
+    ];
+
+    window.localStorage.setItem(SAVED_TEMPLATES_KEY, JSON.stringify(nextSavedTemplates));
+    setTemplates((current) => [newTemplate, ...current]);
+    setTemplateName("");
+    setSaveTemplateOpen(false);
+    setStatus({ type: "success", message: `Template “${name}” saved in this browser.` });
   };
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -128,9 +262,67 @@ export default function ComposeForm() {
 
   const totalRecipients = to.length + cc.length + bcc.length;
 
+  if (composeMode === "choice") {
+    return (
+      <TemplateChooser
+        templates={templates}
+        loading={templatesLoading}
+        error={templatesError}
+        onStartFromScratch={handleStartFromScratch}
+        onUseTemplate={handleUseTemplate}
+        onDeleteTemplate={handleDeleteTemplate}
+      />
+    );
+  }
+
   return (
     <div className="grid grid-cols-1 gap-8 xl:grid-cols-[minmax(0,1fr)_minmax(360px,460px)]">
       <div>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={() => setComposeMode("choice")}
+            className="text-sm font-semibold text-[#8d1c40] transition-colors hover:text-[#7c0b30] hover:underline"
+          >
+            ← Change starting point
+          </button>
+          <button
+            type="button"
+            onClick={() => setSaveTemplateOpen((open) => !open)}
+            className="rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:border-[#8c1d40] hover:text-[#8c1d40]"
+          >
+            {saveTemplateOpen ? "Cancel save" : "Save as template"}
+          </button>
+        </div>
+
+        {saveTemplateOpen && (
+          <form
+            onSubmit={handleSaveTemplate}
+            className="mb-4 flex flex-col gap-3 rounded-xl border border-rose-100 bg-rose-50/50 p-4 sm:flex-row sm:items-end"
+          >
+            <div className="flex-1">
+              <label htmlFor="template-name" className="mb-1.5 block text-sm font-semibold text-slate-700">
+                Template name
+              </label>
+              <input
+                id="template-name"
+                type="text"
+                required
+                value={templateName}
+                onChange={(e) => setTemplateName(e.target.value)}
+                placeholder="e.g. Monthly campus update"
+                className="w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 shadow-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <button
+              type="submit"
+              className="rounded-lg bg-[#8c1d40] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[#721633]"
+            >
+              Save template
+            </button>
+          </form>
+        )}
+
         <form
           onSubmit={handleSubmit}
           className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden"
@@ -246,5 +438,21 @@ export default function ComposeForm() {
 
       <EmailPreview to={to} cc={cc} subject={subject} body={body} />
     </div>
+  );
+}
+
+function isEmailTemplate(value: unknown): value is EmailTemplate {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const template = value as Partial<EmailTemplate>;
+  return (
+    typeof template.id === "string" &&
+    typeof template.name === "string" &&
+    typeof template.description === "string" &&
+    typeof template.subject === "string" &&
+    typeof template.content === "string" &&
+    template.source === "saved"
   );
 }
