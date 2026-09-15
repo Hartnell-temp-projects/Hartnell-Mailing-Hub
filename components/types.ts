@@ -12,6 +12,8 @@ export interface EmailTemplate {
   source: "built-in" | "saved";
 }
 
+export type EditorMode = "rich" | "html";
+
 export type RecipientMode = "manual" | "list";
 
 export type Status = { type: "success" | "error"; message: string } | null;
