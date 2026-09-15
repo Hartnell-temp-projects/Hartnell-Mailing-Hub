@@ -93,7 +93,7 @@ export default function EmailPreview({ to, cc, subject, body }: Props) {
         <iframe
           title="Rendered email body preview"
           srcDoc={createPreviewDocument(body)}
-          sandbox=""
+          sandbox="allow-popups"
           className="block h-[440px] w-full border-0 bg-white"
         />
       </div>

@@ -50,6 +50,8 @@ interface ActiveFormats {
   fontSize: string;
   blockStyle: string;
   alignment: string;
+  highlighted: boolean;
+  highlightColor: string;
 }
 
 function getEditableBody(value: string) {
@@ -65,6 +67,29 @@ function getBlockStyle(value: string) {
   return value.replace(/[<>]/g, "").toLowerCase();
 }
 
+function isHighlighted(value: string) {
+  const normalized = value.replace(/\s/g, "").toLowerCase();
+  return !["", "transparent", "rgba(0,0,0,0)", "rgb(255,255,255)"].includes(normalized);
+}
+
+function colorsMatch(first: string, second: string) {
+  const normalize = (value: string) => value.replace(/\s/g, "").toLowerCase();
+  const normalizedFirst = normalize(first);
+  const normalizedSecond = normalize(second);
+
+  if (normalizedFirst === normalizedSecond) {
+    return true;
+  }
+  if (!normalizedSecond.startsWith("#") || normalizedSecond.length !== 7) {
+    return false;
+  }
+
+  const red = parseInt(normalizedSecond.slice(1, 3), 16);
+  const green = parseInt(normalizedSecond.slice(3, 5), 16);
+  const blue = parseInt(normalizedSecond.slice(5, 7), 16);
+  return normalizedFirst === `rgb(${red},${green},${blue})`;
+}
+
 function getActiveFormats(): ActiveFormats {
   let alignment = "left";
   if (document.queryCommandState("justifyCenter")) {
@@ -77,6 +102,9 @@ function getActiveFormats(): ActiveFormats {
     alignment = "justify";
   }
 
+  const highlightColor =
+    document.queryCommandValue("hiliteColor") || document.queryCommandValue("backColor");
+
   return {
     bold: document.queryCommandState("bold"),
     italic: document.queryCommandState("italic"),
@@ -87,6 +115,8 @@ function getActiveFormats(): ActiveFormats {
     fontSize: document.queryCommandValue("fontSize"),
     blockStyle: getBlockStyle(document.queryCommandValue("formatBlock")),
     alignment,
+    highlighted: isHighlighted(highlightColor),
+    highlightColor,
   };
 }
 
@@ -151,6 +181,8 @@ export default function MessageEditor({ value, mode, onChange, onModeChange }: P
     fontSize: "",
     blockStyle: "p",
     alignment: "left",
+    highlighted: false,
+    highlightColor: "",
   });
 
   useEffect(() => {
@@ -207,10 +239,32 @@ export default function MessageEditor({ value, mode, onChange, onModeChange }: P
   };
 
   const handleInsertLink = () => {
+    const selection = window.getSelection();
+    const savedRange = selection && selection.rangeCount > 0
+      ? selection.getRangeAt(0).cloneRange()
+      : null;
     const url = window.prompt("Enter the URL for the selected text:", "https://");
     if (!url) return;
 
-    runCommand("createLink", url.trim());
+    editorRef.current?.focus();
+    if (savedRange && selection) {
+      selection.removeAllRanges();
+      selection.addRange(savedRange);
+    }
+
+    document.execCommand("createLink", false, url.trim());
+
+    if (editorRef.current && selection && selection.rangeCount > 0) {
+      const range = selection.getRangeAt(0);
+      editorRef.current.querySelectorAll("a").forEach((link) => {
+        if (range.intersectsNode(link)) {
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+        }
+      });
+    }
+
+    emitEditorChange();
   };
 
   const handleBlockStyle = (value: string) => {
@@ -221,6 +275,13 @@ export default function MessageEditor({ value, mode, onChange, onModeChange }: P
   const handleAlignment = (command: string) => {
     runCommand(command);
     setAlignmentMenuOpen(false);
+  };
+
+  const handleHighlight = () => {
+    runCommand(
+      "hiliteColor",
+      activeFormats.highlighted ? "transparent" : HIGHLIGHT_COLORS[0].value
+    );
   };
 
   return (
@@ -410,16 +471,26 @@ export default function MessageEditor({ value, mode, onChange, onModeChange }: P
               )}
             </div>
             <span className="mx-1 h-5 w-px bg-slate-200" aria-hidden="true" />
-            <span className="px-1 text-xs font-medium text-slate-400">Highlight</span>
+            <ToolbarButton
+              label={activeFormats.highlighted ? "Highlighted" : "Highlight"}
+              title={activeFormats.highlighted ? "Remove highlight" : "Highlight selected text"}
+              active={activeFormats.highlighted}
+              onClick={handleHighlight}
+            />
             {HIGHLIGHT_COLORS.map((color) => (
               <button
                 key={color.value}
                 type="button"
                 title={color.name}
                 aria-label={color.name}
+                aria-pressed={colorsMatch(activeFormats.highlightColor, color.value)}
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => runCommand("hiliteColor", color.value)}
-                className="h-6 w-6 rounded border border-slate-300 shadow-sm"
+                className={`h-6 w-6 rounded border shadow-sm transition-shadow ${
+                  colorsMatch(activeFormats.highlightColor, color.value)
+                    ? "border-slate-700 ring-2 ring-amber-300 ring-offset-1"
+                    : "border-slate-300"
+                }`}
                 style={{ backgroundColor: color.value }}
               />
             ))}
