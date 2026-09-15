@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { EmailTag, EmailTemplate, Status } from "./types";
+import { EditorMode, EmailTag, EmailTemplate, Status } from "./types";
 import RecipientSection from "./recipients/RecipientSection";
 import StatusBanner from "./StatusBanner";
 import EmailPreview from "./EmailPreview";
 import TemplateChooser from "./TemplateChooser";
+import MessageEditor from "./MessageEditor";
 
 const SES_RECIPIENT_LIMIT = 50;
 const SAVED_TEMPLATES_KEY = "hartnell-mailer-saved-templates";
@@ -21,6 +22,7 @@ function chunkArray<T>(arr: T[], size: number): T[][] {
 
 export default function ComposeForm() {
   const [composeMode, setComposeMode] = useState<"choice" | "compose">("choice");
+  const [editorMode, setEditorMode] = useState<EditorMode>("rich");
   const [to, setTo] = useState<EmailTag[]>([]);
   const [cc, setCc] = useState<EmailTag[]>([]);
   const [bcc, setBcc] = useState<EmailTag[]>([]);
@@ -121,6 +123,7 @@ export default function ComposeForm() {
 
   const handleStartFromScratch = () => {
     resetDraft();
+    setEditorMode("rich");
     setComposeMode("compose");
   };
 
@@ -128,6 +131,7 @@ export default function ComposeForm() {
     resetDraft();
     setSubject(template.subject);
     setBody(template.content);
+    setEditorMode("html");
     setComposeMode("compose");
   };
 
@@ -185,6 +189,10 @@ export default function ComposeForm() {
     e.preventDefault();
     if (to.length === 0) {
       setStatus({ type: "error", message: "At least one recipient is required." });
+      return;
+    }
+    if (!body.trim()) {
+      setStatus({ type: "error", message: "A message body is required." });
       return;
     }
 
@@ -246,6 +254,7 @@ export default function ComposeForm() {
       setBcc([]);
       setSubject("");
       setBody("");
+      setEditorMode("rich");
     } catch (err) {
       setStatus({
         type: "error",
@@ -362,24 +371,12 @@ export default function ComposeForm() {
               />
             </div>
 
-            {/* Body */}
-            <div>
-              <label
-                htmlFor="body"
-                className="block text-sm font-semibold text-slate-600 mb-1.5 tracking-wide uppercase"
-              >
-                Message Body <span className="text-red-500">*</span>
-              </label>
-              <textarea
-                id="body"
-                required
-                value={body}
-                onChange={(e) => setBody(e.target.value)}
-                placeholder="Write your message here..."
-                rows={10}
-                className="w-full px-3.5 py-2.5 border border-slate-200 rounded-lg text-sm text-slate-800 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-shadow resize-y leading-relaxed"
-              />
-            </div>
+            <MessageEditor
+              value={body}
+              mode={editorMode}
+              onChange={setBody}
+              onModeChange={setEditorMode}
+            />
           </div>
 
           {/* Footer */}
