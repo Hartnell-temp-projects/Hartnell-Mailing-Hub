@@ -1,7 +1,14 @@
-export default function Header() {
+"use client";
+
+interface Props {
+  currentView: "compose" | "dashboard";
+  onNavigate: (view: "compose" | "dashboard") => void;
+}
+
+export default function Header({ currentView, onNavigate }: Props) {
   return (
     <header className="bg-[#8c1d40] text-white shadow-md">
-      <div className="max-w-4xl mx-auto px-6 py-4 flex items-center gap-4">
+      <div className="mx-auto flex max-w-7xl items-center gap-4 px-6 py-4">
         <div className="flex items-center justify-center w-10 h-10 rounded-full bg-white/10 border border-white/20">
           <svg
             className="w-5 h-5 text-white"
@@ -25,6 +32,30 @@ export default function Header() {
             Internal Communications — Powered by AWS SES
           </p>
         </div>
+        <nav className="ml-auto flex items-center gap-1" aria-label="Main navigation">
+          <button
+            type="button"
+            onClick={() => onNavigate("compose")}
+            className={`rounded-lg px-3 py-2 text-sm font-semibold transition-colors ${
+              currentView === "compose"
+                ? "bg-white text-[#8c1d40]"
+                : "text-white/80 hover:bg-white/10 hover:text-white"
+            }`}
+          >
+            Compose
+          </button>
+          <button
+            type="button"
+            onClick={() => onNavigate("dashboard")}
+            className={`rounded-lg px-3 py-2 text-sm font-semibold transition-colors ${
+              currentView === "dashboard"
+                ? "bg-white text-[#8c1d40]"
+                : "text-white/80 hover:bg-white/10 hover:text-white"
+            }`}
+          >
+            Dashboard
+          </button>
+        </nav>
       </div>
     </header>
   );
