@@ -3,6 +3,8 @@
 import { useRef, useState } from "react";
 import { RECIPIENT_GROUPS } from "@/lib/recipientLists";
 import { parseRecipientFile } from "@/lib/parseRecipientFile";
+import { SAVED_LISTS_KEY } from "@/lib/storageKeys";
+import { SavedRecipientList } from "../types";
 
 interface Props {
   onRecipientsLoaded: (emails: string[]) => void;
@@ -11,6 +13,9 @@ interface Props {
 export default function ListRecipients({ onRecipientsLoaded }: Props) {
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [uploadedFile, setUploadedFile] = useState<{ name: string; count: number } | null>(null);
+  const [uploadedEmails, setUploadedEmails] = useState<string[]>([]);
+  const [listName, setListName] = useState("");
+  const [savedListName, setSavedListName] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -32,6 +37,9 @@ export default function ListRecipients({ onRecipientsLoaded }: Props) {
         return;
       }
       setUploadedFile({ name: file.name, count: emails.length });
+      setUploadedEmails(emails);
+      setListName(file.name.replace(/\.[^/.]+$/, ""));
+      setSavedListName(null);
       onRecipientsLoaded(emails);
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : "Failed to parse file.");
@@ -40,7 +48,38 @@ export default function ListRecipients({ onRecipientsLoaded }: Props) {
 
   const clearUpload = () => {
     setUploadedFile(null);
+    setUploadedEmails([]);
+    setListName("");
+    setSavedListName(null);
     onRecipientsLoaded([]);
+  };
+
+  const saveUploadedList = () => {
+    const name = listName.trim();
+    if (!name || uploadedEmails.length === 0) return;
+
+    const newList: SavedRecipientList = {
+      id: crypto.randomUUID(),
+      name,
+      description: `${uploadedEmails.length} recipients`,
+      emails: uploadedEmails,
+      createdAt: new Date().toISOString(),
+    };
+
+    try {
+      const stored = window.localStorage.getItem(SAVED_LISTS_KEY);
+      const previous: unknown = stored ? JSON.parse(stored) : [];
+      const previousLists = Array.isArray(previous)
+        ? previous.filter(isSavedRecipientList)
+        : [];
+      window.localStorage.setItem(
+        SAVED_LISTS_KEY,
+        JSON.stringify([newList, ...previousLists])
+      );
+      setSavedListName(name);
+    } catch {
+      setUploadError("This mailing list could not be saved in the browser.");
+    }
   };
 
   return (
@@ -126,36 +165,67 @@ export default function ListRecipients({ onRecipientsLoaded }: Props) {
             <p className="text-xs text-slate-400">CSV or XLSX / XLS supported</p>
           </div>
         ) : (
-          <div className="flex items-center justify-between px-4 py-3 border border-emerald-200 rounded-lg bg-emerald-50">
-            <div className="flex items-center gap-3">
-              <svg
-                className="w-5 h-5 text-emerald-500 shrink-0"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2}
+          <>
+            <div className="flex items-center justify-between px-4 py-3 border border-emerald-200 rounded-lg bg-emerald-50">
+              <div className="flex items-center gap-3">
+                <svg
+                  className="w-5 h-5 text-emerald-500 shrink-0"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                  />
+                </svg>
+                <div>
+                  <p className="text-sm font-medium text-emerald-800">{uploadedFile.name}</p>
+                  <p className="text-xs text-emerald-600">
+                    {uploadedFile.count} recipient{uploadedFile.count !== 1 ? "s" : ""} loaded
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={clearUpload}
+                className="text-xs text-emerald-700 hover:text-emerald-900 font-medium underline-offset-2 hover:underline"
               >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                Remove
+              </button>
+            </div>
+          {!savedListName ? (
+            <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3">
+              <label htmlFor="mailing-list-name" className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Save this mailing list
+              </label>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <input
+                  id="mailing-list-name"
+                  type="text"
+                  value={listName}
+                  onChange={(e) => setListName(e.target.value)}
+                  placeholder="e.g. Fall orientation attendees"
+                  className="min-w-0 flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
-              </svg>
-              <div>
-                <p className="text-sm font-medium text-emerald-800">{uploadedFile.name}</p>
-                <p className="text-xs text-emerald-600">
-                  {uploadedFile.count} recipient{uploadedFile.count !== 1 ? "s" : ""} loaded
-                </p>
+                <button
+                  type="button"
+                  onClick={saveUploadedList}
+                  disabled={!listName.trim()}
+                  className="rounded-lg bg-[#8c1d40] px-3.5 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#721633] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Save list
+                </button>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={clearUpload}
-              className="text-xs text-emerald-700 hover:text-emerald-900 font-medium underline-offset-2 hover:underline"
-            >
-              Remove
-            </button>
-          </div>
+          ) : (
+            <p className="mt-2 text-xs font-medium text-emerald-700">
+              Saved as “{savedListName}” in this browser.
+            </p>
+          )}
+          </>
         )}
 
         {uploadError && (
@@ -163,5 +233,21 @@ export default function ListRecipients({ onRecipientsLoaded }: Props) {
         )}
       </div>
     </div>
+  );
+}
+
+function isSavedRecipientList(value: unknown): value is SavedRecipientList {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const list = value as Partial<SavedRecipientList>;
+  return (
+    typeof list.id === "string" &&
+    typeof list.name === "string" &&
+    typeof list.description === "string" &&
+    Array.isArray(list.emails) &&
+    list.emails.every((email) => typeof email === "string") &&
+    typeof list.createdAt === "string"
   );
 }
