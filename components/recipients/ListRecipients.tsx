@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { RECIPIENT_GROUPS } from "@/lib/recipientLists";
 import { parseRecipientFile } from "@/lib/parseRecipientFile";
 import { SAVED_LISTS_KEY } from "@/lib/storageKeys";
@@ -16,12 +16,35 @@ export default function ListRecipients({ onRecipientsLoaded }: Props) {
   const [uploadedEmails, setUploadedEmails] = useState<string[]>([]);
   const [listName, setListName] = useState("");
   const [savedListName, setSavedListName] = useState<string | null>(null);
+  const [savedLists, setSavedLists] = useState<SavedRecipientList[]>([]);
+  const [selectedSavedListId, setSelectedSavedListId] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  useEffect(() => {
+    const loadSavedLists = () => {
+      try {
+        const stored = window.localStorage.getItem(SAVED_LISTS_KEY);
+        const parsed: unknown = stored ? JSON.parse(stored) : [];
+        setSavedLists(
+          Array.isArray(parsed) ? parsed.filter(isSavedRecipientList) : []
+        );
+      } catch {
+        setSavedLists([]);
+      }
+    };
+
+    const frameId = window.requestAnimationFrame(loadSavedLists);
+    return () => window.cancelAnimationFrame(frameId);
+  }, []);
+
   const handleGroupSelect = (groupId: string) => {
     setSelectedGroupId(groupId);
+    setSelectedSavedListId(null);
     setUploadedFile(null);
+    setUploadedEmails([]);
+    setListName("");
+    setSavedListName(null);
     setUploadError(null);
     const group = RECIPIENT_GROUPS.find((g) => g.id === groupId);
     if (group) onRecipientsLoaded(group.emails);
@@ -30,6 +53,7 @@ export default function ListRecipients({ onRecipientsLoaded }: Props) {
   const handleFileUpload = async (file: File) => {
     setUploadError(null);
     setSelectedGroupId(null);
+    setSelectedSavedListId(null);
     try {
       const emails = await parseRecipientFile(file);
       if (emails.length === 0) {
@@ -76,9 +100,36 @@ export default function ListRecipients({ onRecipientsLoaded }: Props) {
         SAVED_LISTS_KEY,
         JSON.stringify([newList, ...previousLists])
       );
+      setSavedLists((current) => [newList, ...current]);
       setSavedListName(name);
     } catch {
       setUploadError("This mailing list could not be saved in the browser.");
+    }
+  };
+
+  const handleSavedListSelect = (list: SavedRecipientList) => {
+    setSelectedGroupId(null);
+    setSelectedSavedListId(list.id);
+    setUploadedFile(null);
+    setUploadedEmails([]);
+    setListName("");
+    setSavedListName(null);
+    setUploadError(null);
+    onRecipientsLoaded(list.emails);
+  };
+
+  const handleSavedListDelete = (list: SavedRecipientList) => {
+    if (!window.confirm(`Delete the “${list.name}” mailing list?`)) {
+      return;
+    }
+
+    const remainingLists = savedLists.filter((item) => item.id !== list.id);
+    window.localStorage.setItem(SAVED_LISTS_KEY, JSON.stringify(remainingLists));
+    setSavedLists(remainingLists);
+
+    if (selectedSavedListId === list.id) {
+      setSelectedSavedListId(null);
+      onRecipientsLoaded([]);
     }
   };
 
@@ -113,6 +164,53 @@ export default function ListRecipients({ onRecipientsLoaded }: Props) {
           ))}
         </div>
       </div>
+
+      {savedLists.length > 0 && (
+        <div>
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
+            Saved Mailing Lists
+          </p>
+          <div className="space-y-2">
+            {savedLists.map((list) => (
+              <div
+                key={list.id}
+                className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 transition-colors ${
+                  selectedSavedListId === list.id
+                    ? "border-[#8c1d40] bg-red-50/40"
+                    : "border-slate-200 bg-white"
+                }`}
+              >
+                <button
+                  type="button"
+                  onClick={() => handleSavedListSelect(list)}
+                  className="min-w-0 flex-1 text-left"
+                >
+                  <span className="block truncate text-sm font-medium text-slate-700">
+                    {list.name}
+                  </span>
+                  <span className="block text-xs text-slate-400">
+                    {list.emails.length} recipient{list.emails.length !== 1 ? "s" : ""}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSavedListSelect(list)}
+                  className="shrink-0 text-xs font-semibold text-[#8c1d40] hover:underline"
+                >
+                  Use
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSavedListDelete(list)}
+                  className="shrink-0 text-xs font-medium text-slate-400 hover:text-red-600 hover:underline"
+                >
+                  Delete
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="flex items-center gap-3">
         <div className="flex-1 border-t border-slate-100" />
