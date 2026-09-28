@@ -7,7 +7,6 @@ interface Props {
   value: string;
   mode: EditorMode;
   onChange: (value: string) => void;
-  onModeChange: (mode: EditorMode) => void;
 }
 
 const FULL_DOCUMENT_PATTERN = /<!doctype\s+html|<html[\s>]/i;
@@ -165,7 +164,7 @@ function ToolbarButton({
   );
 }
 
-export default function MessageEditor({ value, mode, onChange, onModeChange }: Props) {
+export default function MessageEditor({ value, mode, onChange }: Props) {
   const editorRef = useRef<HTMLDivElement>(null);
   const fullDocumentRef = useRef<string | null>(null);
   const [fontSizeMenuOpen, setFontSizeMenuOpen] = useState(false);
@@ -295,36 +294,8 @@ export default function MessageEditor({ value, mode, onChange, onModeChange }: P
             Message Body <span className="text-red-500">*</span>
           </label>
           <p className="mt-1 text-xs text-slate-400">
-            Use rich text tools or edit the email HTML directly.
+            Use the formatting tools to edit your message.
           </p>
-        </div>
-        <div className="flex rounded-lg border border-slate-200 bg-slate-50 p-0.5" role="tablist" aria-label="Editor mode">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={mode === "rich"}
-            onClick={() => onModeChange("rich")}
-            className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
-              mode === "rich"
-                ? "bg-white text-[#8c1d40] shadow-sm"
-                : "text-slate-500 hover:text-slate-700"
-            }`}
-          >
-            Rich text
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={mode === "html"}
-            onClick={() => onModeChange("html")}
-            className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
-              mode === "html"
-                ? "bg-white text-[#8c1d40] shadow-sm"
-                : "text-slate-500 hover:text-slate-700"
-            }`}
-          >
-            HTML
-          </button>
         </div>
       </div>
 

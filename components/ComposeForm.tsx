@@ -131,7 +131,7 @@ export default function ComposeForm() {
     resetDraft();
     setSubject(template.subject);
     setBody(template.content);
-    setEditorMode("html");
+    setEditorMode("rich");
     setComposeMode("compose");
   };
 
@@ -375,7 +375,6 @@ export default function ComposeForm() {
               value={body}
               mode={editorMode}
               onChange={setBody}
-              onModeChange={setEditorMode}
             />
           </div>
 
