@@ -232,6 +232,9 @@ export default function ComposeForm() {
         });
 
         if (!res.ok) {
+          if (res.status === 401) {
+            throw new Error("Please log in with Duo before sending email.");
+          }
           throw new Error(
             `Batch ${i + 1} of ${bccBatches.length} failed (recipients ${
               i * bccChunkSize + 1

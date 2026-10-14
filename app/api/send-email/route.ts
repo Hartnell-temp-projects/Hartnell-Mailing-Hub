@@ -1,9 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
+import { getSession } from "@/lib/auth/session";
 
 const ses = new SESClient({ region: process.env.AWS_REGION ?? "us-west-2" });
 
 export async function POST(req: NextRequest) {
+  if (!getSession(req)) {
+    return NextResponse.json(
+      { error: "Authentication is required before sending email." },
+      { status: 401 }
+    );
+  }
+
   /**
    * use sdk to send email
    * email content will be sent in req
