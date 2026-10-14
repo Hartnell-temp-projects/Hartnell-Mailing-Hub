@@ -184,7 +184,7 @@ The current route requires an authenticated Duo session, as well as `content`, `
 | `GET /api/auth/session` | Returns safe information about the current signed-in user. |
 | `POST /api/auth/logout` | Removes the current application session. |
 
-Logging out redirects the user to `/login` with a confirmation message and a new **Log in with Duo** button.
+Unauthenticated users start on the root landing page with a **Log in with Duo** button. After logout, the root landing page displays a confirmation message. The mailing tool is shown only after an authenticated session is confirmed.
 
 ## Project structure
 

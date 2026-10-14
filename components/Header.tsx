@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 
 interface Props {
   currentView: "compose" | "dashboard";
@@ -14,7 +13,6 @@ interface AuthUser {
 }
 
 export default function Header({ currentView, onNavigate }: Props) {
-  const router = useRouter();
   const [user, setUser] = useState<AuthUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
 
@@ -59,7 +57,7 @@ export default function Header({ currentView, onNavigate }: Props) {
 
     if (response.ok) {
       setUser(null);
-      router.replace("/login?loggedOut=1");
+      window.location.replace("/?loggedOut=1");
     } else {
       window.alert("We could not complete logout. Please try again.");
     }
