@@ -1,12 +1,58 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import ComposeForm from "@/components/ComposeForm";
 import Dashboard from "@/components/Dashboard";
 import Header from "@/components/Header";
+import LandingPage from "@/components/LandingPage";
 
-export default function Home() {
+type AuthState = "loading" | "authenticated" | "unauthenticated";
+
+function HomeContent() {
+  const searchParams = useSearchParams();
+  const loggedOut = searchParams.get("loggedOut") === "1";
+  const [authState, setAuthState] = useState<AuthState>("loading");
   const [currentView, setCurrentView] = useState<"compose" | "dashboard">("compose");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const checkSession = async () => {
+      try {
+        const response = await fetch("/api/auth/session", {
+          cache: "no-store",
+          credentials: "same-origin",
+        });
+
+        if (!cancelled) {
+          setAuthState(response.ok ? "authenticated" : "unauthenticated");
+        }
+      } catch {
+        if (!cancelled) {
+          setAuthState("unauthenticated");
+        }
+      }
+    };
+
+    void checkSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (authState === "loading") {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-50 px-6">
+        <p className="text-sm font-medium text-slate-500">Checking your session…</p>
+      </main>
+    );
+  }
+
+  if (authState === "unauthenticated") {
+    return <LandingPage loggedOut={loggedOut} />;
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
@@ -34,5 +80,19 @@ export default function Home() {
         Internal use only &mdash; Unauthorized use is prohibited.
       </footer>
     </div>
+  );
+}
+
+export default function Home() {
+  return (
+    <Suspense
+      fallback={
+        <main className="flex min-h-screen items-center justify-center bg-slate-50 px-6">
+          <p className="text-sm font-medium text-slate-500">Loading Hartnell Mailer…</p>
+        </main>
+      }
+    >
+      <HomeContent />
+    </Suspense>
   );
 }

@@ -11,6 +11,7 @@ The application currently supports:
 - CSV, XLSX, and XLS recipient-file imports
 - A dashboard showing sent-email history, saved templates, and mailing lists
 - Batched sending for larger recipient groups
+- Duo Generic OIDC login through server-side authentication routes
 
 ## Requirements
 
@@ -36,13 +37,27 @@ During local development, the application interface can be opened without AWS cr
    npm install
    ```
 
-3. Start the development server:
+3. Create `.env.local` in the project root. It should be next to `package.json` and must not be committed:
+
+   ```env
+   AWS_REGION=us-west-2
+   SES_FROM_ADDRESS=verified-sender@example.edu
+   DUO_ISSUER=https://your-duo-issuer.example/oidc/your-app-id
+   DUO_CLIENT_ID=your-duo-client-id
+   DUO_CLIENT_SECRET=your-duo-client-secret
+   DUO_REDIRECT_URI=http://localhost:3000/api/auth/callback
+   DUO_SCOPE=openid profile email
+   ```
+
+   The AWS SDK uses its normal credential-provider chain. The redirect URI must exactly match the port where the local Next.js server is running and must also be registered in Duo.
+
+4. Start the development server:
 
    ```bash
    npm run dev
    ```
 
-4. Open [http://localhost:3000](http://localhost:3000).
+5. Open the local URL printed by Next.js, such as [http://localhost:3000](http://localhost:3000).
 
 ## Available commands
 
@@ -158,13 +173,25 @@ Sends an email through AWS SES. The request body contains:
 }
 ```
 
-The current route requires `content`, `subject`, and at least one `to` recipient. Authentication and authorization checks still need to be added before this endpoint is used in production.
+The current route requires an authenticated Duo session, as well as `content`, `subject`, and at least one `to` recipient. It returns `401 Unauthorized` when no authenticated session is present.
+
+### Authentication routes
+
+| Route | Purpose |
+| --- | --- |
+| `GET /api/auth/login` | Starts the Duo Authorization Code + PKCE flow. |
+| `GET /api/auth/callback` | Validates Duo's callback and creates the application session. |
+| `GET /api/auth/session` | Returns safe information about the current signed-in user. |
+| `POST /api/auth/logout` | Removes the current application session. |
+
+Unauthenticated users start on the root landing page with a **Log in with Duo** button. After logout, the root landing page displays a confirmation message. The mailing tool is shown only after an authenticated session is confirmed.
 
 ## Project structure
 
 ```text
 app/
   api/
+    auth/                   Duo login, callback, session, and logout routes
     email-templates/       Built-in template API route
     send-email/            AWS SES send route
   page.tsx                 Main client-side application page
@@ -185,7 +212,25 @@ lib/
   parseRecipientFile.ts    CSV/XLS/XLSX email extraction
   recipientLists.ts        Predefined recipient-group definitions
   storageKeys.ts           Browser-storage key constants
+
+lib/auth/
+  config.ts                Duo OIDC discovery and environment configuration
+  session.ts               Server-side sessions and OIDC transactions
 ```
+
+## Duo OIDC authentication
+
+The application uses [`openid-client`](https://github.com/panva/openid-client) on the server with Duo's Generic OIDC integration. The browser is redirected to Duo when the user selects **Log in with Duo**. After successful authentication, the callback route stores the Duo tokens in a server-side session and gives the browser an `HttpOnly` session cookie.
+
+The browser does not receive or store the Duo access or refresh tokens. The current prototype stores sessions in the Next.js process memory, which is appropriate for local testing. A shared session store such as Redis is required before deploying multiple application instances or relying on sessions across restarts.
+
+The Duo administrator must register the exact local callback URL, for example:
+
+```text
+http://localhost:3000/api/auth/callback
+```
+
+Use the port printed by `npm run dev`. Production should use the deployed HTTPS callback URL instead.
 
 ## Testing checklist
 
@@ -200,12 +245,17 @@ lib/
 - Delete the saved template and confirm that the built-in template remains.
 - Upload a CSV with several email addresses and save the resulting list.
 - Refresh the page and confirm that the mailing list appears on the dashboard.
+- Select **Log in with Duo** and confirm that Duo redirects back to the callback URL.
+- Confirm that the header shows the signed-in user and a logout button.
+- Confirm that sending an email while signed out returns an authentication error.
+- Sign in again and confirm that the send request is allowed to reach AWS SES.
 - Send a test message only after configuring SES and verifying the sender and recipient addresses.
 
 ## Security notes
 
 - Never commit `.env.local`, AWS access keys, Duo client secrets, session secrets, or OAuth tokens.
 - Keep server-only environment variables out of client components.
-- Authentication must be enforced in API routes, not only in the user interface.
-- State-changing routes such as email sending will need session validation and CSRF protection when authentication is added.
+- Authentication is enforced in API routes, not only in the user interface.
+- The current server-side session store is in-memory and must be replaced with a shared store before production deployment.
+- State-changing routes such as email sending should receive CSRF protection and additional authorization rules before production use.
 - The current localStorage-based templates, mailing lists, and sent history are suitable for prototype testing, not multi-user production storage.
