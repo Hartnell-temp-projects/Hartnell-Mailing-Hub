@@ -28,15 +28,28 @@ function escapeHtml(value: string) {
     .replace(/'/g, "&#039;");
 }
 
+function replaceRecipientTokens(value: string) {
+  return value.replace(/{{\s*(first_name|last_name|full_name|name)\s*}}/gi, (_, token: string) => {
+    const previews: Record<string, string> = {
+      first_name: "Jordan",
+      last_name: "Lee",
+      full_name: "Jordan Lee",
+      name: "Jordan Lee",
+    };
+    return previews[token.toLowerCase()] ?? "Jordan";
+  });
+}
+
 function createPreviewDocument(body: string) {
   const trimmedBody = body.trim();
   const isFullDocument = /<!doctype\s+html|<html[\s>]/i.test(trimmedBody);
   if (isFullDocument) {
-    return body;
+    return replaceRecipientTokens(body);
   }
 
-  const hasMarkup = /<[a-z][\s\S]*>/i.test(trimmedBody);
-  const content = hasMarkup ? body: escapeHtml(body).replace(/\r?\n/g, "<br />");
+  const previewBody = replaceRecipientTokens(body);
+  const hasMarkup = /<[a-z][\s\S]*>/i.test(previewBody);
+  const content = hasMarkup ? previewBody : escapeHtml(previewBody).replace(/\r?\n/g, "<br />");
 
   return `<!doctype html>
   <html lang="en">
@@ -86,7 +99,7 @@ export default function EmailPreview({ to, cc, subject, body }: Props) {
             {cc.length > 0 && <RecipientLine label="Cc: " value={formatRecipients(cc)} />}
           </div>
           <p className="mt-3 truncate border-t border-slate-200 pt-3 text-sm font-semibold text-slate-800">
-            {subject.trim() || "No subject"}
+            {replaceRecipientTokens(subject.trim()) || "No subject"}
           </p>
         </div>
 

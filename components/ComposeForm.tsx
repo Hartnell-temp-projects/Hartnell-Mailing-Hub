@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { EditorMode, EmailTag, EmailTemplate, Status } from "./types";
+import { EditorMode, EmailTag, EmailTemplate, RecipientRecord, Status } from "./types";
 import RecipientSection from "./recipients/RecipientSection";
 import StatusBanner from "./StatusBanner";
 import EmailPreview from "./EmailPreview";
@@ -10,6 +10,11 @@ import MessageEditor from "./MessageEditor";
 
 const SES_RECIPIENT_LIMIT = 50;
 const SAVED_TEMPLATES_KEY = "hartnell-mailer-saved-templates";
+const PERSONALIZATION_TOKEN_PATTERN = /{{\s*(?:first_name|last_name|full_name|name)\s*}}/i;
+
+function hasToken(value: string, token: string): boolean {
+  return new RegExp(`{{\\s*${token}\\s*}}`, "i").test(value);
+}
 
 function chunkArray<T>(arr: T[], size: number): T[][] {
   if (size <= 0) return [arr];
@@ -26,6 +31,7 @@ export default function ComposeForm() {
   const [to, setTo] = useState<EmailTag[]>([]);
   const [cc, setCc] = useState<EmailTag[]>([]);
   const [bcc, setBcc] = useState<EmailTag[]>([]);
+  const [personalizedRecipients, setPersonalizedRecipients] = useState<RecipientRecord[]>([]);
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   const [loading, setLoading] = useState(false);
@@ -107,15 +113,24 @@ export default function ComposeForm() {
       setter((prev) => prev.filter((t) => t.id !== id));
     };
 
-  const handleListLoad = (emails: string[]) => {
+  const handleListLoad = (recipients: RecipientRecord[]) => {
+    setPersonalizedRecipients(recipients);
     setTo([{ id: crypto.randomUUID(), email: "itrinfo@hartnell.edu" }]);
-    setBcc(emails.map((email) => ({ id: crypto.randomUUID(), email })));
+    setBcc(
+      recipients.map((recipient) => ({
+        id: crypto.randomUUID(),
+        email: recipient.email,
+        firstName: recipient.firstName,
+        lastName: recipient.lastName,
+      }))
+    );
   };
 
   const resetDraft = () => {
     setTo([]);
     setCc([]);
     setBcc([]);
+    setPersonalizedRecipients([]);
     setSubject("");
     setBody("");
     setStatus(null);
@@ -196,6 +211,44 @@ export default function ComposeForm() {
       return;
     }
 
+    const usesPersonalization = PERSONALIZATION_TOKEN_PATTERN.test(`${subject}\n${body}`);
+    if (usesPersonalization && personalizedRecipients.length === 0) {
+      setStatus({
+        type: "error",
+        message: "Upload or select a recipient list with names before using personalization tokens.",
+      });
+      return;
+    }
+
+    if (
+      hasToken(`${subject}\n${body}`, "first_name") &&
+      personalizedRecipients.some((recipient) => !recipient.firstName?.trim())
+    ) {
+      setStatus({ type: "error", message: "Every recipient needs a first name for the first-name token." });
+      return;
+    }
+
+    if (
+      hasToken(`${subject}\n${body}`, "last_name") &&
+      personalizedRecipients.some((recipient) => !recipient.lastName?.trim())
+    ) {
+      setStatus({ type: "error", message: "Every recipient needs a last name for the last-name token." });
+      return;
+    }
+
+    if (
+      hasToken(`${subject}\n${body}`, "full_name") ||
+      hasToken(`${subject}\n${body}`, "name")
+    ) {
+      const missingFullName = personalizedRecipients.some(
+        (recipient) => !recipient.firstName?.trim() && !recipient.lastName?.trim()
+      );
+      if (missingFullName) {
+        setStatus({ type: "error", message: "Every recipient needs a name for the full-name token." });
+        return;
+      }
+    }
+
     const toEmails = to.map((t) => t.email);
     const ccEmails = cc.map((t) => t.email);
     const bccEmails = bcc.map((t) => t.email);
@@ -212,22 +265,38 @@ export default function ComposeForm() {
     }
 
     const bccBatches = bccEmails.length > 0 ? chunkArray(bccEmails, bccChunkSize) : [[]];
+    const requestBatches = usesPersonalization ? [bccEmails] : bccBatches;
+    const personalizedByEmail = new Map(
+      personalizedRecipients.map((recipient) => [recipient.email.toLowerCase(), recipient])
+    );
 
     setLoading(true);
     setStatus(null);
-    setProgress({ sent: 0, total: bccBatches.length });
+    setProgress({ sent: 0, total: requestBatches.length });
 
     try {
-      for (let i = 0; i < bccBatches.length; i++) {
+      for (let i = 0; i < requestBatches.length; i++) {
+        const batchRecipients = usesPersonalization
+          ? requestBatches[i]
+              .map((email) => personalizedByEmail.get(email.toLowerCase()))
+              .filter((recipient): recipient is RecipientRecord => Boolean(recipient))
+          : [];
+
+        if (usesPersonalization && batchRecipients.length !== requestBatches[i].length) {
+          throw new Error("Some personalized recipients could not be matched to the selected list.");
+        }
+
         const res = await fetch("/api/send-email", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             to: toEmails,
             cc: ccEmails,
-            bcc: bccBatches[i],
+            bcc: requestBatches[i],
             subject,
             content: body,
+            personalizedRecipients: usesPersonalization ? batchRecipients : undefined,
+            personalizedDestination: usesPersonalization ? "bcc" : undefined,
           }),
         });
 
@@ -236,25 +305,26 @@ export default function ComposeForm() {
             throw new Error("Please log in with Duo before sending email.");
           }
           throw new Error(
-            `Batch ${i + 1} of ${bccBatches.length} failed (recipients ${
+            `Batch ${i + 1} of ${requestBatches.length} failed (recipients ${
               i * bccChunkSize + 1
-            }-${i * bccChunkSize + bccBatches[i].length}).`
+            }-${i * bccChunkSize + requestBatches[i].length}).`
           );
         }
 
-        setProgress({ sent: i + 1, total: bccBatches.length });
+        setProgress({ sent: i + 1, total: requestBatches.length });
       }
 
       setStatus({
         type: "success",
         message:
-          bccBatches.length > 1
-            ? `Email sent successfully in ${bccBatches.length} batches.`
+          requestBatches.length > 1
+            ? `Email sent successfully in ${requestBatches.length} batches.`
             : "Email sent successfully.",
       });
       setTo([]);
       setCc([]);
       setBcc([]);
+      setPersonalizedRecipients([]);
       setSubject("");
       setBody("");
       setEditorMode("rich");

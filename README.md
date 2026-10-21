@@ -42,6 +42,7 @@ During local development, the application interface can be opened without AWS cr
    ```env
    AWS_REGION=us-west-2
    SES_FROM_ADDRESS=verified-sender@example.edu
+   SES_TEMPLATE_NAME=HartnellMailerPersonalized
    DUO_ISSUER=https://your-duo-issuer.example/oidc/your-app-id
    DUO_CLIENT_ID=your-duo-client-id
    DUO_CLIENT_SECRET=your-duo-client-secret
@@ -89,6 +90,26 @@ npm run lint      # Run ESLint
 7. Select **Send Email**.
 
 The preview updates as the subject, recipients, and message change. The editor stores the message as HTML so that formatting can be sent through SES.
+
+### Send personalized email with recipient names
+
+The rich-text editor includes a **Recipient name** menu for inserting these SES template variables:
+
+- `{{first_name}}`
+- `{{last_name}}`
+- `{{full_name}}`
+
+To use personalization, upload a recipient file with a header row. The importer recognizes `email`, `first_name`, `last_name`, and `name`-style columns. For example:
+
+```csv
+email,first_name,last_name
+student1@example.edu,Jordan,Lee
+student2@example.edu,Casey,Garcia
+```
+
+When a message contains one of these variables, the send route creates or updates the AWS SES template named by `SES_TEMPLATE_NAME` and sends the message with `SendBulkTemplatedEmailCommand`. The template is managed through the existing AWS SDK integration; no additional application server is required.
+
+This prototype supports names from uploaded and saved mailing lists. Predefined faculty, staff, and student groups still need to be connected to real institutional data before they can provide personalized names.
 
 ### Use and save templates
 
@@ -169,11 +190,19 @@ Sends an email through AWS SES. The request body contains:
   "subject": "Example subject",
   "to": ["recipient@example.edu"],
   "cc": [],
-  "bcc": []
+  "bcc": [],
+  "personalizedRecipients": [
+    {
+      "email": "student@example.edu",
+      "firstName": "Jordan",
+      "lastName": "Lee"
+    }
+  ],
+  "personalizedDestination": "bcc"
 }
 ```
 
-The current route requires an authenticated Duo session, as well as `content`, `subject`, and at least one `to` recipient. It returns `401 Unauthorized` when no authenticated session is present.
+The current route requires an authenticated Duo session, as well as `content`, `subject`, and at least one recipient. It returns `401 Unauthorized` when no authenticated session is present. `personalizedRecipients` is optional; when provided, the route manages the configured SES template and sends one personalized destination per recipient.
 
 ### Authentication routes
 
@@ -259,3 +288,4 @@ Use the port printed by `npm run dev`. Production should use the deployed HTTPS 
 - The current server-side session store is in-memory and must be replaced with a shared store before production deployment.
 - State-changing routes such as email sending should receive CSRF protection and additional authorization rules before production use.
 - The current localStorage-based templates, mailing lists, and sent history are suitable for prototype testing, not multi-user production storage.
+- Personalized sending currently updates one configured SES template before sending. A production implementation should consider template ownership, concurrency, and a database-backed template model if multiple users will send at the same time.

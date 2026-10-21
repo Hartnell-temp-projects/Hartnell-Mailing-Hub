@@ -1,6 +1,14 @@
 export interface EmailTag {
   id: string;
   email: string;
+  firstName?: string;
+  lastName?: string;
+}
+
+export interface RecipientRecord {
+  email: string;
+  firstName?: string;
+  lastName?: string;
 }
 
 export interface EmailTemplate {
@@ -19,6 +27,7 @@ export interface SavedRecipientList {
   name: string;
   description: string;
   emails: string[];
+  recipients?: RecipientRecord[];
   createdAt: string;
 }
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { EmailTag, RecipientMode } from "../types";
+import { EmailTag, RecipientMode, RecipientRecord } from "../types";
 import EmailTagInput from "./EmailTagInput";
 import ListRecipients from "./ListRecipients";
 
@@ -15,7 +15,7 @@ interface Props {
   onRemoveCc: (id: string) => void;
   onAddBcc: (email: string) => void;
   onRemoveBcc: (id: string) => void;
-  onListLoad: (emails: string[]) => void;
+  onListLoad: (recipients: RecipientRecord[]) => void;
 }
 
 export default function RecipientSection({
