@@ -4,16 +4,16 @@ import { useEffect, useRef, useState } from "react";
 import { RECIPIENT_GROUPS } from "@/lib/recipientLists";
 import { parseRecipientFile } from "@/lib/parseRecipientFile";
 import { SAVED_LISTS_KEY } from "@/lib/storageKeys";
-import { SavedRecipientList } from "../types";
+import { RecipientRecord, SavedRecipientList } from "../types";
 
 interface Props {
-  onRecipientsLoaded: (emails: string[]) => void;
+  onRecipientsLoaded: (recipients: RecipientRecord[]) => void;
 }
 
 export default function ListRecipients({ onRecipientsLoaded }: Props) {
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [uploadedFile, setUploadedFile] = useState<{ name: string; count: number } | null>(null);
-  const [uploadedEmails, setUploadedEmails] = useState<string[]>([]);
+  const [uploadedRecipients, setUploadedRecipients] = useState<RecipientRecord[]>([]);
   const [listName, setListName] = useState("");
   const [savedListName, setSavedListName] = useState<string | null>(null);
   const [savedLists, setSavedLists] = useState<SavedRecipientList[]>([]);
@@ -42,12 +42,12 @@ export default function ListRecipients({ onRecipientsLoaded }: Props) {
     setSelectedGroupId(groupId);
     setSelectedSavedListId(null);
     setUploadedFile(null);
-    setUploadedEmails([]);
+    setUploadedRecipients([]);
     setListName("");
     setSavedListName(null);
     setUploadError(null);
     const group = RECIPIENT_GROUPS.find((g) => g.id === groupId);
-    if (group) onRecipientsLoaded(group.emails);
+    if (group) onRecipientsLoaded(group.emails.map((email) => ({ email })));
   };
 
   const handleFileUpload = async (file: File) => {
@@ -55,16 +55,16 @@ export default function ListRecipients({ onRecipientsLoaded }: Props) {
     setSelectedGroupId(null);
     setSelectedSavedListId(null);
     try {
-      const emails = await parseRecipientFile(file);
-      if (emails.length === 0) {
+      const recipients = await parseRecipientFile(file);
+      if (recipients.length === 0) {
         setUploadError("No valid email addresses found in the file.");
         return;
       }
-      setUploadedFile({ name: file.name, count: emails.length });
-      setUploadedEmails(emails);
+      setUploadedFile({ name: file.name, count: recipients.length });
+      setUploadedRecipients(recipients);
       setListName(file.name.replace(/\.[^/.]+$/, ""));
       setSavedListName(null);
-      onRecipientsLoaded(emails);
+      onRecipientsLoaded(recipients);
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : "Failed to parse file.");
     }
@@ -72,7 +72,7 @@ export default function ListRecipients({ onRecipientsLoaded }: Props) {
 
   const clearUpload = () => {
     setUploadedFile(null);
-    setUploadedEmails([]);
+    setUploadedRecipients([]);
     setListName("");
     setSavedListName(null);
     onRecipientsLoaded([]);
@@ -80,13 +80,14 @@ export default function ListRecipients({ onRecipientsLoaded }: Props) {
 
   const saveUploadedList = () => {
     const name = listName.trim();
-    if (!name || uploadedEmails.length === 0) return;
+    if (!name || uploadedRecipients.length === 0) return;
 
     const newList: SavedRecipientList = {
       id: crypto.randomUUID(),
       name,
-      description: `${uploadedEmails.length} recipients`,
-      emails: uploadedEmails,
+      description: `${uploadedRecipients.length} recipients`,
+      emails: uploadedRecipients.map((recipient) => recipient.email),
+      recipients: uploadedRecipients,
       createdAt: new Date().toISOString(),
     };
 
@@ -111,11 +112,11 @@ export default function ListRecipients({ onRecipientsLoaded }: Props) {
     setSelectedGroupId(null);
     setSelectedSavedListId(list.id);
     setUploadedFile(null);
-    setUploadedEmails([]);
+    setUploadedRecipients([]);
     setListName("");
     setSavedListName(null);
     setUploadError(null);
-    onRecipientsLoaded(list.emails);
+    onRecipientsLoaded(list.recipients ?? list.emails.map((email) => ({ email })));
   };
 
   const handleSavedListDelete = (list: SavedRecipientList) => {

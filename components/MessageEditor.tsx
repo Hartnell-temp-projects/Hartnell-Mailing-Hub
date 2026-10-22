@@ -39,6 +39,12 @@ const ALIGNMENT_OPTIONS = [
   { label: "Justify", value: "justify", command: "justifyFull" },
 ];
 
+const RECIPIENT_VARIABLES = [
+  { label: "First name", value: "{{first_name}}" },
+  { label: "Last name", value: "{{last_name}}" },
+  { label: "Full name", value: "{{full_name}}" },
+];
+
 interface ActiveFormats {
   bold: boolean;
   italic: boolean;
@@ -170,6 +176,7 @@ export default function MessageEditor({ value, mode, onChange }: Props) {
   const [fontSizeMenuOpen, setFontSizeMenuOpen] = useState(false);
   const [blockStyleMenuOpen, setBlockStyleMenuOpen] = useState(false);
   const [alignmentMenuOpen, setAlignmentMenuOpen] = useState(false);
+  const [recipientVariableMenuOpen, setRecipientVariableMenuOpen] = useState(false);
   const [activeFormats, setActiveFormats] = useState<ActiveFormats>({
     bold: false,
     italic: false,
@@ -283,6 +290,13 @@ export default function MessageEditor({ value, mode, onChange }: Props) {
     );
   };
 
+  const handleInsertRecipientVariable = (value: string) => {
+    editorRef.current?.focus();
+    document.execCommand("insertText", false, value);
+    emitEditorChange();
+    setRecipientVariableMenuOpen(false);
+  };
+
   return (
     <div>
       <div className="mb-1.5 flex flex-wrap items-start justify-between gap-3">
@@ -313,6 +327,41 @@ export default function MessageEditor({ value, mode, onChange }: Props) {
             <ToolbarButton label="• List" title="Bullet list" active={activeFormats.bulletList} onClick={() => runCommand("insertUnorderedList")} />
             <ToolbarButton label="1. List" title="Numbered list" active={activeFormats.numberedList} onClick={() => runCommand("insertOrderedList")} />
             <ToolbarButton label="Link" title="Add link to selected text" onClick={handleInsertLink} />
+            <div className="relative">
+              <button
+                type="button"
+                title="Insert recipient name"
+                aria-label="Insert recipient name"
+                aria-haspopup="menu"
+                aria-expanded={recipientVariableMenuOpen}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => setRecipientVariableMenuOpen((open) => !open)}
+                className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-white hover:text-[#8c1d40]"
+              >
+                <span aria-hidden="true">@</span>
+                <span>Recipient name</span>
+                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
+                </svg>
+              </button>
+              {recipientVariableMenuOpen && (
+                <div className="absolute left-0 top-full z-10 mt-1 min-w-36 rounded-lg border border-slate-200 bg-white p-1 shadow-lg" role="menu">
+                  {RECIPIENT_VARIABLES.map((variable) => (
+                    <button
+                      key={variable.value}
+                      type="button"
+                      role="menuitem"
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => handleInsertRecipientVariable(variable.value)}
+                      className="flex w-full items-center justify-between rounded-md px-2.5 py-2 text-left text-sm text-slate-600 transition-colors hover:bg-rose-50 hover:text-[#8c1d40]"
+                    >
+                      <span>{variable.label}</span>
+                      <code className="ml-3 text-[11px] text-slate-400">{variable.value}</code>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <ToolbarButton label="Clear" title="Clear formatting" onClick={() => runCommand("removeFormat")} />
             <span className="mx-1 h-5 w-px bg-slate-200" aria-hidden="true" />
             <div className="relative">
