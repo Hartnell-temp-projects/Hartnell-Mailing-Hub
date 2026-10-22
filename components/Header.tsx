@@ -90,7 +90,7 @@ export default function Header({ currentView, onNavigate }: Props) {
           </p>
         </div>
         <nav className="ml-auto flex items-center gap-1" aria-label="Main navigation">
-          <button
+          {/* <button
             type="button"
             onClick={() => onNavigate("compose")}
             className={`rounded-lg px-3 py-2 text-sm font-semibold transition-colors ${
@@ -100,7 +100,8 @@ export default function Header({ currentView, onNavigate }: Props) {
             }`}
           >
             Compose
-          </button>
+          </button> */}
+          {/*
           <button
             type="button"
             onClick={() => onNavigate("dashboard")}
@@ -112,6 +113,7 @@ export default function Header({ currentView, onNavigate }: Props) {
           >
             Dashboard
           </button>
+          */}
           {!authLoading && !user && (
             <a
               href="/api/auth/login"

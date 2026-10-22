@@ -115,7 +115,7 @@ export default function ComposeForm() {
 
   const handleListLoad = (recipients: RecipientRecord[]) => {
     setPersonalizedRecipients(recipients);
-    setTo([{ id: crypto.randomUUID(), email: "itrinfo@hartnell.edu" }]);
+    setTo([{ id: crypto.randomUUID(), email: process.env.SES_FROM_ADDRESS || "itrinfo@hartnell.edu" }]);
     setBcc(
       recipients.map((recipient) => ({
         id: crypto.randomUUID(),
@@ -202,7 +202,7 @@ export default function ComposeForm() {
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (to.length === 0) {
+    if (to.length === 0 && bcc.length === 0) {
       setStatus({ type: "error", message: "At least one recipient is required." });
       return;
     }

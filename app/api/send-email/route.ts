@@ -185,7 +185,7 @@ export async function POST(req: NextRequest) {
 
   if (!content || !subject || (toAddresses.length === 0 && bccAddresses.length === 0)) {
     return NextResponse.json(
-      { error: "content, subject, and to are required" },
+      { error: "content, subject, and at least one recipient are required" },
       { status: 400 }
     );
   }
