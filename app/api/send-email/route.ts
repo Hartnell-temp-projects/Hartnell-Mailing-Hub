@@ -119,12 +119,19 @@ async function sendPersonalizedEmail({
   cc: string[];
   personalizedRecipients: RecipientRecord[];
   personalizedDestination: "to" | "bcc";
-}) {
+}): Promise<{
+  sentRecipients: string[];
+  failedRecipients: string[];
+  failureReasons: Record<string, string>;
+}> {
   await ensureSesTemplate(subject, content);
+  const sentRecipients: string[] = [];
+  const failedRecipients: string[] = [];
+  const failureReasons: Record<string, string> = {};
 
   for (let start = 0; start < personalizedRecipients.length; start += SES_RECIPIENT_LIMIT) {
     const batch = personalizedRecipients.slice(start, start + SES_RECIPIENT_LIMIT);
-    await ses.send(
+    const response = await ses.send(
       new SendBulkTemplatedEmailCommand({
         Source: process.env.SES_FROM_ADDRESS,
         Template: TEMPLATE_NAME,
@@ -145,7 +152,20 @@ async function sendPersonalizedEmail({
         })),
       })
     );
+
+    batch.forEach((recipient, index) => {
+      const result = response.Status?.[index];
+      if (result?.Status === "Success") {
+        sentRecipients.push(recipient.email);
+        return;
+      }
+
+      failedRecipients.push(recipient.email);
+      failureReasons[recipient.email] = result?.Error || "AWS SES rejected this recipient.";
+    });
   }
+
+  return { sentRecipients, failedRecipients, failureReasons };
 }
 
 export async function POST(req: NextRequest) {
@@ -203,7 +223,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: invalidFields }, { status: 400 });
     }
 
-    await sendPersonalizedEmail({
+    const result = await sendPersonalizedEmail({
       subject,
       content,
       to: toAddresses,
@@ -213,7 +233,14 @@ export async function POST(req: NextRequest) {
     });
 
     return NextResponse.json(
-      { message: "personalized email sent", recipientCount: personalizedRecipients.length },
+      {
+        message:
+          result.failedRecipients.length > 0
+            ? "Some personalized recipients could not be sent."
+            : "personalized email sent",
+        ...result,
+        recipientCount: personalizedRecipients.length,
+      },
       { status: 200 }
     );
   }
@@ -232,5 +259,13 @@ export async function POST(req: NextRequest) {
   });
 
   await ses.send(command);
-  return NextResponse.json({ message: "email sent" }, { status: 200 });
+  return NextResponse.json(
+    {
+      message: "email sent",
+      sentRecipients: bccAddresses,
+      failedRecipients: [],
+      failureReasons: {},
+    },
+    { status: 200 }
+  );
 }
