@@ -3,7 +3,11 @@
 import { useEffect, useRef, useState } from "react";
 import { RECIPIENT_GROUPS } from "@/lib/recipientLists";
 import { parseRecipientFile } from "@/lib/parseRecipientFile";
-import { SAVED_LISTS_KEY } from "@/lib/storageKeys";
+import {
+  deleteSavedRecipientList,
+  fetchSavedRecipientLists,
+  saveRecipientList,
+} from "@/lib/storage/api";
 import { RecipientRecord, SavedRecipientList } from "../types";
 
 interface Props {
@@ -19,23 +23,33 @@ export default function ListRecipients({ onRecipientsLoaded }: Props) {
   const [savedLists, setSavedLists] = useState<SavedRecipientList[]>([]);
   const [selectedSavedListId, setSelectedSavedListId] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [listsLoading, setListsLoading] = useState(true);
+  const [listsError, setListsError] = useState<string | null>(null);
+  const [savingList, setSavingList] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const loadSavedLists = () => {
-      try {
-        const stored = window.localStorage.getItem(SAVED_LISTS_KEY);
-        const parsed: unknown = stored ? JSON.parse(stored) : [];
-        setSavedLists(
-          Array.isArray(parsed) ? parsed.filter(isSavedRecipientList) : []
-        );
-      } catch {
-        setSavedLists([]);
-      }
-    };
+    let cancelled = false;
 
-    const frameId = window.requestAnimationFrame(loadSavedLists);
-    return () => window.cancelAnimationFrame(frameId);
+    // Saved lists live in the user's Box folder, so they follow the user across browsers.
+    fetchSavedRecipientLists()
+      .then((lists) => {
+        if (!cancelled) setSavedLists(lists);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setListsError(
+            error instanceof Error ? error.message : "Saved mailing lists could not be loaded."
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setListsLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handleGroupSelect = (groupId: string) => {
@@ -78,33 +92,22 @@ export default function ListRecipients({ onRecipientsLoaded }: Props) {
     onRecipientsLoaded([]);
   };
 
-  const saveUploadedList = () => {
+  const saveUploadedList = async () => {
     const name = listName.trim();
-    if (!name || uploadedRecipients.length === 0) return;
+    if (!name || uploadedRecipients.length === 0 || savingList) return;
 
-    const newList: SavedRecipientList = {
-      id: crypto.randomUUID(),
-      name,
-      description: `${uploadedRecipients.length} recipients`,
-      emails: uploadedRecipients.map((recipient) => recipient.email),
-      recipients: uploadedRecipients,
-      createdAt: new Date().toISOString(),
-    };
-
+    setSavingList(true);
+    setUploadError(null);
     try {
-      const stored = window.localStorage.getItem(SAVED_LISTS_KEY);
-      const previous: unknown = stored ? JSON.parse(stored) : [];
-      const previousLists = Array.isArray(previous)
-        ? previous.filter(isSavedRecipientList)
-        : [];
-      window.localStorage.setItem(
-        SAVED_LISTS_KEY,
-        JSON.stringify([newList, ...previousLists])
-      );
+      const newList = await saveRecipientList({ name, recipients: uploadedRecipients });
       setSavedLists((current) => [newList, ...current]);
-      setSavedListName(name);
-    } catch {
-      setUploadError("This mailing list could not be saved in the browser.");
+      setSavedListName(newList.name);
+    } catch (error) {
+      setUploadError(
+        error instanceof Error ? error.message : "This mailing list could not be saved to Box."
+      );
+    } finally {
+      setSavingList(false);
     }
   };
 
@@ -119,14 +122,22 @@ export default function ListRecipients({ onRecipientsLoaded }: Props) {
     onRecipientsLoaded(list.recipients ?? list.emails.map((email) => ({ email })));
   };
 
-  const handleSavedListDelete = (list: SavedRecipientList) => {
+  const handleSavedListDelete = async (list: SavedRecipientList) => {
     if (!window.confirm(`Delete the “${list.name}” mailing list?`)) {
       return;
     }
 
-    const remainingLists = savedLists.filter((item) => item.id !== list.id);
-    window.localStorage.setItem(SAVED_LISTS_KEY, JSON.stringify(remainingLists));
-    setSavedLists(remainingLists);
+    try {
+      await deleteSavedRecipientList(list.id);
+    } catch (error) {
+      setListsError(
+        error instanceof Error ? error.message : "The mailing list could not be deleted."
+      );
+      return;
+    }
+
+    setListsError(null);
+    setSavedLists((current) => current.filter((item) => item.id !== list.id));
 
     if (selectedSavedListId === list.id) {
       setSelectedSavedListId(null);
@@ -165,6 +176,18 @@ export default function ListRecipients({ onRecipientsLoaded }: Props) {
           ))}
         </div>
       </div>
+
+      {listsLoading && (
+        <p className="text-xs text-slate-400" role="status">
+          Loading saved mailing lists…
+        </p>
+      )}
+
+      {listsError && (
+        <p className="text-xs font-medium text-amber-700" role="alert">
+          {listsError}
+        </p>
+      )}
 
       {savedLists.length > 0 && (
         <div>
@@ -311,17 +334,17 @@ export default function ListRecipients({ onRecipientsLoaded }: Props) {
                 />
                 <button
                   type="button"
-                  onClick={saveUploadedList}
-                  disabled={!listName.trim()}
+                  onClick={() => void saveUploadedList()}
+                  disabled={!listName.trim() || savingList}
                   className="rounded-lg bg-[#8c1d40] px-3.5 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#721633] disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  Save list
+                  {savingList ? "Saving…" : "Save list"}
                 </button>
               </div>
             </div>
           ) : (
             <p className="mt-2 text-xs font-medium text-emerald-700">
-              Saved as “{savedListName}” in this browser.
+              Saved as “{savedListName}” to Box.
             </p>
           )}
           </>
@@ -332,21 +355,5 @@ export default function ListRecipients({ onRecipientsLoaded }: Props) {
         )}
       </div>
     </div>
-  );
-}
-
-function isSavedRecipientList(value: unknown): value is SavedRecipientList {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-
-  const list = value as Partial<SavedRecipientList>;
-  return (
-    typeof list.id === "string" &&
-    typeof list.name === "string" &&
-    typeof list.description === "string" &&
-    Array.isArray(list.emails) &&
-    list.emails.every((email) => typeof email === "string") &&
-    typeof list.createdAt === "string"
   );
 }

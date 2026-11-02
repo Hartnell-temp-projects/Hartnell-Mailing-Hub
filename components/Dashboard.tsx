@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { SAVED_LISTS_KEY, SAVED_TEMPLATES_KEY, SENT_EMAILS_KEY } from "@/lib/storageKeys";
+import { fetchSavedRecipientLists, fetchTemplates } from "@/lib/storage/api";
 import { EmailTemplate, SavedRecipientList, SentEmailRecord } from "./types";
 
 interface Props {
@@ -11,19 +11,31 @@ interface Props {
 export default function Dashboard({ onCompose }: Props) {
   const [templates, setTemplates] = useState<EmailTemplate[]>([]);
   const [lists, setLists] = useState<SavedRecipientList[]>([]);
-  const [sentEmails, setSentEmails] = useState<SentEmailRecord[]>([]);
+  // Sent-email history isn't persisted yet, so this stays empty for now.
+  const [sentEmails] = useState<SentEmailRecord[]>([]);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    const loadDashboardData = () => {
-      setTemplates(readStoredArray(SAVED_TEMPLATES_KEY, isSavedTemplate));
-      setLists(readStoredArray(SAVED_LISTS_KEY, isSavedRecipientList));
-      setSentEmails(readStoredArray(SENT_EMAILS_KEY, isSentEmailRecord));
-      setLoaded(true);
-    };
-    const frameId = window.requestAnimationFrame(loadDashboardData);
+    let cancelled = false;
 
-    return () => window.cancelAnimationFrame(frameId);
+    Promise.allSettled([fetchTemplates(), fetchSavedRecipientLists()]).then(
+      ([templateResult, listResult]) => {
+        if (cancelled) return;
+        if (templateResult.status === "fulfilled") {
+          setTemplates(
+            templateResult.value.templates.filter((template) => template.source === "saved")
+          );
+        }
+        if (listResult.status === "fulfilled") {
+          setLists(listResult.value);
+        }
+        setLoaded(true);
+      }
+    );
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const totalRecipients = sentEmails.reduce(
@@ -68,7 +80,7 @@ export default function Dashboard({ onCompose }: Props) {
             <SummaryCard
               label="Saved templates"
               value={templates.length}
-              detail="Available in this browser"
+              detail="Stored in Box"
               color="blue"
             />
             <SummaryCard
@@ -221,61 +233,4 @@ function formatDate(value: string) {
     day: "numeric",
     year: "numeric",
   }).format(new Date(value));
-}
-
-function readStoredArray<T>(key: string, guard: (value: unknown) => value is T) {
-  try {
-    const stored = window.localStorage.getItem(key);
-    const parsed: unknown = stored ? JSON.parse(stored) : [];
-    return Array.isArray(parsed) ? parsed.filter(guard) : [];
-  } catch {
-    return [];
-  }
-}
-
-function isSavedTemplate(value: unknown): value is EmailTemplate {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-  const template = value as Partial<EmailTemplate>;
-  return (
-    typeof template.id === "string" &&
-    typeof template.name === "string" &&
-    typeof template.description === "string" &&
-    typeof template.subject === "string" &&
-    typeof template.content === "string" &&
-    template.source === "saved"
-  );
-}
-
-function isSavedRecipientList(value: unknown): value is SavedRecipientList {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-  const list = value as Partial<SavedRecipientList>;
-  return (
-    typeof list.id === "string" &&
-    typeof list.name === "string" &&
-    typeof list.description === "string" &&
-    Array.isArray(list.emails) &&
-    list.emails.every((email) => typeof email === "string") &&
-    typeof list.createdAt === "string"
-  );
-}
-
-function isSentEmailRecord(value: unknown): value is SentEmailRecord {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-  const record = value as Partial<SentEmailRecord>;
-  return (
-    typeof record.id === "string" &&
-    typeof record.subject === "string" &&
-    typeof record.recipientCount === "number" &&
-    typeof record.toCount === "number" &&
-    typeof record.ccCount === "number" &&
-    typeof record.bccCount === "number" &&
-    typeof record.batches === "number" &&
-    typeof record.sentAt === "string"
-  );
 }
