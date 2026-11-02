@@ -9,6 +9,7 @@ import TemplateChooser from "./TemplateChooser";
 import MessageEditor from "./MessageEditor";
 
 const SES_RECIPIENT_LIMIT = 50;
+const SEND_BATCH_TIMEOUT_MS = 30_000;
 const SAVED_TEMPLATES_KEY = "hartnell-mailer-saved-templates";
 const PERSONALIZATION_TOKEN_PATTERN = /{{\s*(?:first_name|last_name|full_name|name)\s*}}/i;
 
@@ -289,11 +290,14 @@ export default function ComposeForm() {
 
       let response: Response;
       let responseBody: SendResponse = {};
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), SEND_BATCH_TIMEOUT_MS);
 
       try {
         response = await fetch("/api/send-email", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
           body: JSON.stringify({
             to: toEmails,
             cc: ccEmails,
@@ -305,10 +309,16 @@ export default function ComposeForm() {
           }),
         });
         responseBody = (await response.json().catch(() => ({}))) as SendResponse;
-      } catch {
-        requestError = "The sending request could not be completed.";
+      } catch (error) {
+        requestError = controller.signal.aborted
+          ? `Batch ${i + 1} timed out after ${SEND_BATCH_TIMEOUT_MS / 1000} seconds.`
+          : error instanceof Error && error.message
+            ? error.message
+            : "The sending request could not be completed.";
         uncertainRecipients.push(...requestBatches.slice(i).flat());
         break;
+      } finally {
+        clearTimeout(timeoutId);
       }
 
       if (!response.ok) {
@@ -621,20 +631,25 @@ export default function ComposeForm() {
                 before retrying.
               </p>
             )}
-            <ul className="mt-2 space-y-1 text-amber-800">
-              {sendRecovery.retryRecipients.slice(0, 5).map((email) => (
-                <li key={email}>
-                  {email}
-                  {sendRecovery.failureReasons[email] && ` — ${sendRecovery.failureReasons[email]}`}
-                </li>
-              ))}
-            </ul>
-            {sendRecovery.retryRecipients.length > 5 && (
-              <p className="mt-1 text-amber-800">
-                And {sendRecovery.retryRecipients.length - 5} more recipient
-                {sendRecovery.retryRecipients.length - 5 !== 1 ? "s" : ""}.
+            {sendRecovery.uncertainRecipients.length === 0 && (
+              <p className="mt-1">
+                SES reported that these recipients failed. Review the reported reason before retrying.
               </p>
             )}
+            <details className="mt-3 rounded-lg border border-amber-200 bg-white/60 px-3 py-2">
+              <summary className="cursor-pointer font-semibold text-amber-900">
+                Show all {sendRecovery.retryRecipients.length} recipient
+                {sendRecovery.retryRecipients.length !== 1 ? "s" : ""}
+              </summary>
+              <ul className="mt-2 max-h-56 space-y-1 overflow-y-auto text-amber-800">
+                {sendRecovery.retryRecipients.map((email) => (
+                  <li key={email}>
+                    {email}
+                    {sendRecovery.failureReasons[email] && ` — ${sendRecovery.failureReasons[email]}`}
+                  </li>
+                ))}
+              </ul>
+            </details>
             <div className="mt-3 flex flex-wrap gap-3">
               <button
                 type="button"
