@@ -3,6 +3,7 @@ import { EmailTag } from "./types";
 interface Props {
   to: EmailTag[];
   cc: EmailTag[];
+  bcc: EmailTag[];
   subject: string;
   body: string;
 }
@@ -40,6 +41,10 @@ function replaceRecipientTokens(value: string) {
   });
 }
 
+function replaceNonBreakingSpaces(value: string) {
+  return value.replace(/&nbsp;|&#160;|&#xA0;/gi, " ");
+}
+
 function createPreviewDocument(body: string) {
   const trimmedBody = body.trim();
   const isFullDocument = /<!doctype\s+html|<html[\s>]/i.test(trimmedBody);
@@ -47,7 +52,7 @@ function createPreviewDocument(body: string) {
     return replaceRecipientTokens(body);
   }
 
-  const previewBody = replaceRecipientTokens(body);
+  const previewBody = replaceNonBreakingSpaces(replaceRecipientTokens(body));
   const hasMarkup = /<[a-z][\s\S]*>/i.test(previewBody);
   const content = hasMarkup ? previewBody : escapeHtml(previewBody).replace(/\r?\n/g, "<br />");
 
@@ -73,7 +78,7 @@ function RecipientLine({ label, value }: { label: string; value: string }) {
   );
 }
 
-export default function EmailPreview({ to, cc, subject, body }: Props) {
+export default function EmailPreview({ to, cc, bcc, subject, body }: Props) {
   return (
     <aside className="xl:sticky xl:top-6 xl:self-start" aria-label="Email preview">
       <div className="mb-3 flex items-center justify-between">
@@ -97,6 +102,7 @@ export default function EmailPreview({ to, cc, subject, body }: Props) {
           <div className="space-y-0.5">
             <RecipientLine label="To: " value={formatRecipients(to)} />
             {cc.length > 0 && <RecipientLine label="Cc: " value={formatRecipients(cc)} />}
+            {bcc.length > 0 && <RecipientLine label="Bcc: " value={formatRecipients(bcc)} />}
           </div>
           <p className="mt-3 truncate border-t border-slate-200 pt-3 text-sm font-semibold text-slate-800">
             {replaceRecipientTokens(subject.trim()) || "No subject"}

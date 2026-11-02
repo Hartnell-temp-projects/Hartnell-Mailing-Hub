@@ -10,6 +10,8 @@ import MessageEditor from "./MessageEditor";
 import { deleteSavedTemplate, fetchTemplates, saveTemplate } from "@/lib/storage/api";
 
 const SES_RECIPIENT_LIMIT = 50;
+const SEND_BATCH_TIMEOUT_MS = 30_000;
+const SES_BATCH_DELAY_MS = 2_500;
 const PERSONALIZATION_TOKEN_PATTERN = /{{\s*(?:first_name|last_name|full_name|name)\s*}}/i;
 
 function hasToken(value: string, token: string): boolean {
@@ -17,12 +19,40 @@ function hasToken(value: string, token: string): boolean {
 }
 
 function chunkArray<T>(arr: T[], size: number): T[][] {
-  if (size <= 0) return [arr];
+  if (size <= 0) {
+    return [arr];
+  }
   const chunks: T[][] = [];
   for (let i = 0; i < arr.length; i += size) {
     chunks.push(arr.slice(i, i + size));
   }
   return chunks.length > 0 ? chunks : [[]];
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+interface SendResponse {
+  sentRecipients?: string[];
+  failedRecipients?: string[];
+  failureReasons?: Record<string, string>;
+  error?: string;
+}
+
+interface SendRecovery {
+  personalized: boolean;
+  totalRecipients: number;
+  sentRecipients: string[];
+  retryRecipients: string[];
+  uncertainRecipients: string[];
+  failureReasons: Record<string, string>;
+}
+
+function uniqueEmails(emails: string[]): string[] {
+  return Array.from(
+    new Map(emails.map((email) => [email.trim().toLowerCase(), email.trim()])).values()
+  );
 }
 
 export default function ComposeForm() {
@@ -37,6 +67,7 @@ export default function ComposeForm() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<Status>(null);
   const [progress, setProgress] = useState<{ sent: number; total: number } | null>(null);
+  const [sendRecovery, setSendRecovery] = useState<SendRecovery | null>(null);
   const [templates, setTemplates] = useState<EmailTemplate[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(true);
   const [templatesError, setTemplatesError] = useState<string | null>(null);
@@ -76,9 +107,15 @@ export default function ComposeForm() {
     };
   }, []);
 
+  const clearSendRecovery = () => {
+    setSendRecovery(null);
+    setStatus(null);
+  };
+
   const addTag =
     (setter: React.Dispatch<React.SetStateAction<EmailTag[]>>) =>
     (email: string) => {
+      clearSendRecovery();
       setter((prev) => {
         if (prev.some((t) => t.email === email)) {
           return prev;
@@ -90,10 +127,12 @@ export default function ComposeForm() {
   const removeTag =
     (setter: React.Dispatch<React.SetStateAction<EmailTag[]>>) =>
     (id: string) => {
+      clearSendRecovery();
       setter((prev) => prev.filter((t) => t.id !== id));
     };
 
   const handleListLoad = (recipients: RecipientRecord[]) => {
+    clearSendRecovery();
     setPersonalizedRecipients(recipients);
     setTo([{ id: crypto.randomUUID(), email: process.env.SES_FROM_ADDRESS || "itrinfo@hartnell.edu" }]);
     setBcc(
@@ -107,6 +146,7 @@ export default function ComposeForm() {
   };
 
   const resetDraft = () => {
+    clearSendRecovery();
     setTo([]);
     setCc([]);
     setBcc([]);
@@ -177,6 +217,164 @@ export default function ComposeForm() {
     }
   };
 
+  const sendRecipientEmails = async (
+    recipientEmails: string[],
+    usesPersonalization: boolean,
+    previousRecovery: SendRecovery | null = null
+  ) => {
+    const toEmails = to.map((t) => t.email);
+    const ccEmails = cc.map((t) => t.email);
+    const reservedSlots = toEmails.length + ccEmails.length;
+    const bccChunkSize = Math.max(SES_RECIPIENT_LIMIT - reservedSlots, 1);
+
+    if (reservedSlots >= SES_RECIPIENT_LIMIT) {
+      setStatus({
+        type: "error",
+        message: `To + Cc already use ${reservedSlots} of ${SES_RECIPIENT_LIMIT} allowed recipients per email — no room left for Bcc.`,
+      });
+      return;
+    }
+
+    const bccBatches = recipientEmails.length > 0 ? chunkArray(recipientEmails, bccChunkSize) : [[]];
+    const requestBatches = usesPersonalization
+      ? chunkArray(recipientEmails, SES_RECIPIENT_LIMIT)
+      : bccBatches;
+    const personalizedByEmail = new Map(
+      personalizedRecipients.map((recipient) => [recipient.email.toLowerCase(), recipient])
+    );
+    const sentRecipients: string[] = [];
+    const failedRecipients: string[] = [];
+    const uncertainRecipients: string[] = [];
+    const failureReasons: Record<string, string> = {};
+    let requestError: string | null = null;
+
+    setLoading(true);
+    setStatus(null);
+    setProgress({ sent: 0, total: requestBatches.length });
+
+    for (let i = 0; i < requestBatches.length; i++) {
+      const batch = requestBatches[i];
+      const batchRecipients = usesPersonalization
+        ? batch
+            .map((email) => personalizedByEmail.get(email.toLowerCase()))
+            .filter((recipient): recipient is RecipientRecord => Boolean(recipient))
+        : [];
+
+      if (usesPersonalization && batchRecipients.length !== batch.length) {
+        setStatus({
+          type: "error",
+          message: "Some personalized recipients could not be matched to the selected list.",
+        });
+        setLoading(false);
+        setProgress(null);
+        return;
+      }
+
+      let response: Response;
+      let responseBody: SendResponse = {};
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), SEND_BATCH_TIMEOUT_MS);
+
+      try {
+        response = await fetch("/api/send-email", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
+          body: JSON.stringify({
+            to: toEmails,
+            cc: ccEmails,
+            bcc: batch,
+            subject,
+            content: body,
+            personalizedRecipients: usesPersonalization ? batchRecipients : undefined,
+            personalizedDestination: usesPersonalization ? "bcc" : undefined,
+          }),
+        });
+        responseBody = (await response.json().catch(() => ({}))) as SendResponse;
+      } catch (error) {
+        requestError = controller.signal.aborted
+          ? `Batch ${i + 1} timed out after ${SEND_BATCH_TIMEOUT_MS / 1000} seconds.`
+          : error instanceof Error && error.message
+            ? error.message
+            : "The sending request could not be completed.";
+        uncertainRecipients.push(...requestBatches.slice(i).flat());
+        break;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
+      if (!response.ok) {
+        requestError =
+          responseBody.error ||
+          (response.status === 401
+            ? "Please log in with Duo before sending email."
+            : "The email service could not confirm this request.");
+        uncertainRecipients.push(...requestBatches.slice(i).flat());
+        break;
+      }
+
+      const successful = Array.isArray(responseBody.sentRecipients)
+        ? responseBody.sentRecipients
+        : batch;
+      sentRecipients.push(...successful);
+
+      if (Array.isArray(responseBody.failedRecipients)) {
+        failedRecipients.push(...responseBody.failedRecipients);
+      }
+      if (responseBody.failureReasons) {
+        Object.assign(failureReasons, responseBody.failureReasons);
+      }
+
+      setProgress({ sent: i + 1, total: requestBatches.length });
+
+      if (i < requestBatches.length - 1) {
+        await delay(SES_BATCH_DELAY_MS);
+      }
+    }
+
+    const combinedSentRecipients = uniqueEmails([
+      ...(previousRecovery?.sentRecipients ?? []),
+      ...sentRecipients,
+    ]);
+    const retryRecipients = uniqueEmails([...failedRecipients, ...uncertainRecipients]);
+
+    if (retryRecipients.length > 0) {
+      setSendRecovery({
+        personalized: usesPersonalization,
+        totalRecipients: previousRecovery?.totalRecipients ?? recipientEmails.length,
+        sentRecipients: combinedSentRecipients,
+        retryRecipients,
+        uncertainRecipients: uniqueEmails(uncertainRecipients),
+        failureReasons,
+      });
+      setStatus({
+        type: "error",
+        message: `${requestError ? `${requestError} ` : ""}${combinedSentRecipients.length} of ${
+          previousRecovery?.totalRecipients ?? recipientEmails.length
+        } recipients were sent. ${retryRecipients.length} need attention.`,
+      });
+    } else {
+      setSendRecovery(null);
+      setStatus({
+        type: "success",
+        message:
+          requestBatches.length > 1
+            ? `Email sent successfully in ${requestBatches.length} batches.`
+            : "Email sent successfully.",
+      });
+      setTo([]);
+      setCc([]);
+      setBcc([]);
+      setPersonalizedRecipients([]);
+      setSubject("");
+      setBody("");
+      setEditorMode("rich");
+    }
+
+    setLoading(false);
+    setProgress(null);
+  };
+
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (to.length === 0 && bcc.length === 0) {
@@ -213,10 +411,7 @@ export default function ComposeForm() {
       return;
     }
 
-    if (
-      hasToken(`${subject}\n${body}`, "full_name") ||
-      hasToken(`${subject}\n${body}`, "name")
-    ) {
+    if (hasToken(`${subject}\n${body}`, "full_name") || hasToken(`${subject}\n${body}`, "name")) {
       const missingFullName = personalizedRecipients.some(
         (recipient) => !recipient.firstName?.trim() && !recipient.lastName?.trim()
       );
@@ -226,97 +421,20 @@ export default function ComposeForm() {
       }
     }
 
-    const toEmails = to.map((t) => t.email);
-    const ccEmails = cc.map((t) => t.email);
-    const bccEmails = bcc.map((t) => t.email);
-
-    const reservedSlots = toEmails.length + ccEmails.length;
-    const bccChunkSize = Math.max(SES_RECIPIENT_LIMIT - reservedSlots, 1);
-
-    if (reservedSlots >= SES_RECIPIENT_LIMIT) {
-      setStatus({
-        type: "error",
-        message: `To + Cc already use ${reservedSlots} of ${SES_RECIPIENT_LIMIT} allowed recipients per email — no room left for Bcc.`,
-      });
-      return;
-    }
-
-    const bccBatches = bccEmails.length > 0 ? chunkArray(bccEmails, bccChunkSize) : [[]];
-    const requestBatches = usesPersonalization ? [bccEmails] : bccBatches;
-    const personalizedByEmail = new Map(
-      personalizedRecipients.map((recipient) => [recipient.email.toLowerCase(), recipient])
+    clearSendRecovery();
+    await sendRecipientEmails(
+      bcc.map((recipient) => recipient.email),
+      usesPersonalization
     );
+  };
 
-    setLoading(true);
-    setStatus(null);
-    setProgress({ sent: 0, total: requestBatches.length });
-
-    try {
-      for (let i = 0; i < requestBatches.length; i++) {
-        const batchRecipients = usesPersonalization
-          ? requestBatches[i]
-              .map((email) => personalizedByEmail.get(email.toLowerCase()))
-              .filter((recipient): recipient is RecipientRecord => Boolean(recipient))
-          : [];
-
-        if (usesPersonalization && batchRecipients.length !== requestBatches[i].length) {
-          throw new Error("Some personalized recipients could not be matched to the selected list.");
-        }
-
-        const res = await fetch("/api/send-email", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            to: toEmails,
-            cc: ccEmails,
-            bcc: requestBatches[i],
-            subject,
-            content: body,
-            personalizedRecipients: usesPersonalization ? batchRecipients : undefined,
-            personalizedDestination: usesPersonalization ? "bcc" : undefined,
-          }),
-        });
-
-        if (!res.ok) {
-          if (res.status === 401) {
-            throw new Error("Please log in with Duo before sending email.");
-          }
-          throw new Error(
-            `Batch ${i + 1} of ${requestBatches.length} failed (recipients ${
-              i * bccChunkSize + 1
-            }-${i * bccChunkSize + requestBatches[i].length}).`
-          );
-        }
-
-        setProgress({ sent: i + 1, total: requestBatches.length });
-      }
-
-      setStatus({
-        type: "success",
-        message:
-          requestBatches.length > 1
-            ? `Email sent successfully in ${requestBatches.length} batches.`
-            : "Email sent successfully.",
-      });
-      setTo([]);
-      setCc([]);
-      setBcc([]);
-      setPersonalizedRecipients([]);
-      setSubject("");
-      setBody("");
-      setEditorMode("rich");
-    } catch (err) {
-      setStatus({
-        type: "error",
-        message:
-          err instanceof Error
-            ? `${err.message} Earlier batches may have already been sent — check before retrying.`
-            : "Failed to send email. Please try again.",
-      });
-    } finally {
-      setLoading(false);
-      setProgress(null);
-    }
+  const handleRetryFailedRecipients = async () => {
+    if (!sendRecovery || loading) return;
+    await sendRecipientEmails(
+      sendRecovery.retryRecipients,
+      sendRecovery.personalized,
+      sendRecovery
+    );
   };
 
   const totalRecipients = to.length + cc.length + bcc.length;
@@ -416,7 +534,10 @@ export default function ComposeForm() {
                 type="text"
                 required
                 value={subject}
-                onChange={(e) => setSubject(e.target.value)}
+                onChange={(e) => {
+                  clearSendRecovery();
+                  setSubject(e.target.value);
+                }}
                 placeholder="Email subject line"
                 className="w-full px-3.5 py-2.5 border border-slate-200 rounded-lg text-sm text-slate-800 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-shadow"
               />
@@ -425,7 +546,10 @@ export default function ComposeForm() {
             <MessageEditor
               value={body}
               mode={editorMode}
-              onChange={setBody}
+              onChange={(value) => {
+                clearSendRecovery();
+                setBody(value);
+              }}
             />
           </div>
 
@@ -481,9 +605,63 @@ export default function ComposeForm() {
         </form>
 
         {status && <StatusBanner status={status} />}
+
+        {sendRecovery && (
+          <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-4 text-sm text-amber-900">
+            <p className="font-semibold">
+              {sendRecovery.retryRecipients.length} recipient
+              {sendRecovery.retryRecipients.length !== 1 ? "s" : ""} need attention.
+            </p>
+            {sendRecovery.uncertainRecipients.length > 0 && (
+              <p className="mt-1">
+                Some recipients could not be confirmed. They may have been accepted by the email provider, so review
+                before retrying.
+              </p>
+            )}
+            {sendRecovery.uncertainRecipients.length === 0 && (
+              <p className="mt-1">
+                SES reported that these recipients failed. Review the reported reason before retrying.
+              </p>
+            )}
+            <details className="mt-3 rounded-lg border border-amber-200 bg-white/60 px-3 py-2">
+              <summary className="cursor-pointer font-semibold text-amber-900">
+                Show all {sendRecovery.retryRecipients.length} recipient
+                {sendRecovery.retryRecipients.length !== 1 ? "s" : ""}
+              </summary>
+              <ul className="mt-2 max-h-56 space-y-1 overflow-y-auto text-amber-800">
+                {sendRecovery.retryRecipients.map((email) => (
+                  <li key={email}>
+                    {email}
+                    {sendRecovery.failureReasons[email] && ` — ${sendRecovery.failureReasons[email]}`}
+                  </li>
+                ))}
+              </ul>
+            </details>
+            <div className="mt-3 flex flex-wrap gap-3">
+              <button
+                type="button"
+                onClick={() => void handleRetryFailedRecipients()}
+                disabled={loading}
+                className="rounded-lg bg-[#8c1d40] px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[#721633] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {sendRecovery.uncertainRecipients.length > 0
+                  ? "Retry unconfirmed recipients"
+                  : "Retry failed recipients"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setSendRecovery(null)}
+                disabled={loading}
+                className="rounded-lg border border-amber-300 bg-white px-4 py-2 text-sm font-semibold text-amber-900 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
-      <EmailPreview to={to} cc={cc} subject={subject} body={body} />
+      <EmailPreview to={to} cc={cc} bcc={bcc} subject={subject} body={body} />
     </div>
   );
 }
