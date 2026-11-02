@@ -10,6 +10,7 @@ import MessageEditor from "./MessageEditor";
 
 const SES_RECIPIENT_LIMIT = 50;
 const SEND_BATCH_TIMEOUT_MS = 30_000;
+const SES_BATCH_DELAY_MS = 2_500;
 const SAVED_TEMPLATES_KEY = "hartnell-mailer-saved-templates";
 const PERSONALIZATION_TOKEN_PATTERN = /{{\s*(?:first_name|last_name|full_name|name)\s*}}/i;
 
@@ -26,6 +27,10 @@ function chunkArray<T>(arr: T[], size: number): T[][] {
     chunks.push(arr.slice(i, i + size));
   }
   return chunks.length > 0 ? chunks : [[]];
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 interface SendResponse {
@@ -344,6 +349,10 @@ export default function ComposeForm() {
       }
 
       setProgress({ sent: i + 1, total: requestBatches.length });
+
+      if (i < requestBatches.length - 1) {
+        await delay(SES_BATCH_DELAY_MS);
+      }
     }
 
     const combinedSentRecipients = uniqueEmails([
