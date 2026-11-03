@@ -187,7 +187,7 @@ export default function ComposeForm() {
     }
   };
 
-  const handleSaveTemplate = async (e: React.FormEvent<HTMLFormElement>) => {
+  const handleSaveTemplate = async (e: React.SubmitEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (savingTemplate) return;
     const name = templateName.trim();
@@ -375,7 +375,7 @@ export default function ComposeForm() {
     setProgress(null);
   };
 
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (e: React.SubmitEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (to.length === 0 && bcc.length === 0) {
       setStatus({ type: "error", message: "At least one recipient is required." });
