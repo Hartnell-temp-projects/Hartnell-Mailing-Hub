@@ -7,11 +7,11 @@ import StatusBanner from "./StatusBanner";
 import EmailPreview from "./EmailPreview";
 import TemplateChooser from "./TemplateChooser";
 import MessageEditor from "./MessageEditor";
+import { deleteSavedTemplate, fetchTemplates, saveTemplate } from "@/lib/storage/api";
 
 const SES_RECIPIENT_LIMIT = 50;
 const SEND_BATCH_TIMEOUT_MS = 30_000;
 const SES_BATCH_DELAY_MS = 2_500;
-const SAVED_TEMPLATES_KEY = "hartnell-mailer-saved-templates";
 const PERSONALIZATION_TOKEN_PATTERN = /{{\s*(?:first_name|last_name|full_name|name)\s*}}/i;
 
 function hasToken(value: string, token: string): boolean {
@@ -73,45 +73,25 @@ export default function ComposeForm() {
   const [templatesError, setTemplatesError] = useState<string | null>(null);
   const [saveTemplateOpen, setSaveTemplateOpen] = useState(false);
   const [templateName, setTemplateName] = useState("");
+  const [savingTemplate, setSavingTemplate] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
 
+    // Built-in templates and the user's saved templates (from Box) come from one endpoint.
     const loadTemplates = async () => {
-      let savedTemplates: EmailTemplate[] = [];
-
       try {
-        const stored = window.localStorage.getItem(SAVED_TEMPLATES_KEY);
-        let parsed: unknown = [];
-        if (stored) {
-          parsed = JSON.parse(stored);
-        }
-
-        if (Array.isArray(parsed)) {
-          savedTemplates = parsed.filter(isEmailTemplate);
-        }
-      } catch {
-        savedTemplates = [];
-      }
-
-      try {
-        const response = await fetch("/api/email-templates");
-        if (!response.ok) {
-          throw new Error("Built-in templates could not be loaded.");
-        }
-
-        const builtInTemplates = (await response.json()) as EmailTemplate[];
+        const { templates: loaded, errors } = await fetchTemplates();
         if (!cancelled) {
-          setTemplates([...builtInTemplates, ...savedTemplates]);
+          setTemplates(loaded);
+          setTemplatesError(errors.length > 0 ? errors.join(" ") : null);
         }
       } catch (error) {
         if (!cancelled) {
-          setTemplates(savedTemplates);
-          let message = "Built-in templates could not be loaded.";
-          if (error instanceof Error) {
-            message = error.message;
-          }
-          setTemplatesError(message);
+          setTemplates([]);
+          setTemplatesError(
+            error instanceof Error ? error.message : "Templates could not be loaded."
+          );
         }
       } finally {
         if (!cancelled) {
@@ -190,26 +170,26 @@ export default function ComposeForm() {
     setComposeMode("compose");
   };
 
-  const handleDeleteTemplate = (template: EmailTemplate) => {
+  const handleDeleteTemplate = async (template: EmailTemplate) => {
     if (template.source !== "saved") return;
 
     const confirmed = window.confirm(`Delete the “${template.name}” template?`);
     if (!confirmed) return;
 
-    const remainingTemplates = templates.filter((item) => item.id !== template.id);
-    const remainingSavedTemplates = remainingTemplates.filter(
-      (item) => item.source === "saved"
-    );
-
-    window.localStorage.setItem(
-      SAVED_TEMPLATES_KEY,
-      JSON.stringify(remainingSavedTemplates)
-    );
-    setTemplates(remainingTemplates);
+    try {
+      await deleteSavedTemplate(template.id);
+      setTemplates((current) => current.filter((item) => item.id !== template.id));
+      setTemplatesError(null);
+    } catch (error) {
+      setTemplatesError(
+        error instanceof Error ? error.message : "The template could not be deleted."
+      );
+    }
   };
 
-  const handleSaveTemplate = (e: React.FormEvent<HTMLFormElement>) => {
+  const handleSaveTemplate = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (savingTemplate) return;
     const name = templateName.trim();
 
     if (!name || !subject.trim() || !body.trim()) {
@@ -220,24 +200,21 @@ export default function ComposeForm() {
       return;
     }
 
-    const newTemplate: EmailTemplate = {
-      id: crypto.randomUUID(),
-      name,
-      description: "Saved in this browser.",
-      subject,
-      content: body,
-      source: "saved",
-    };
-    const nextSavedTemplates = [
-      newTemplate,
-      ...templates.filter((template) => template.source === "saved"),
-    ];
-
-    window.localStorage.setItem(SAVED_TEMPLATES_KEY, JSON.stringify(nextSavedTemplates));
-    setTemplates((current) => [newTemplate, ...current]);
-    setTemplateName("");
-    setSaveTemplateOpen(false);
-    setStatus({ type: "success", message: `Template “${name}” saved in this browser.` });
+    setSavingTemplate(true);
+    try {
+      const newTemplate = await saveTemplate({ name, subject, content: body });
+      setTemplates((current) => [newTemplate, ...current]);
+      setTemplateName("");
+      setSaveTemplateOpen(false);
+      setStatus({ type: "success", message: `Template “${name}” saved to Box.` });
+    } catch (error) {
+      setStatus({
+        type: "error",
+        message: error instanceof Error ? error.message : "The template could not be saved.",
+      });
+    } finally {
+      setSavingTemplate(false);
+    }
   };
 
   const sendRecipientEmails = async (
@@ -516,9 +493,10 @@ export default function ComposeForm() {
             </div>
             <button
               type="submit"
-              className="rounded-lg bg-[#8c1d40] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[#721633]"
+              disabled={savingTemplate}
+              className="rounded-lg bg-[#8c1d40] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[#721633] disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Save template
+              {savingTemplate ? "Saving…" : "Save template"}
             </button>
           </form>
         )}
@@ -685,21 +663,5 @@ export default function ComposeForm() {
 
       <EmailPreview to={to} cc={cc} bcc={bcc} subject={subject} body={body} />
     </div>
-  );
-}
-
-function isEmailTemplate(value: unknown): value is EmailTemplate {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-
-  const template = value as Partial<EmailTemplate>;
-  return (
-    typeof template.id === "string" &&
-    typeof template.name === "string" &&
-    typeof template.description === "string" &&
-    typeof template.subject === "string" &&
-    typeof template.content === "string" &&
-    template.source === "saved"
   );
 }
