@@ -1,4 +1,5 @@
 import * as oidc from "openid-client";
+import { getSecret } from "@/lib/secrets";
 
 let configurationPromise: Promise<oidc.Configuration> | undefined;
 
@@ -20,10 +21,9 @@ export async function getDuoConfiguration(): Promise<oidc.Configuration> {
   if (!configurationPromise) {
     const issuer = requiredEnvironmentVariable("DUO_ISSUER");
     const clientId = requiredEnvironmentVariable("DUO_CLIENT_ID");
-    const clientSecret = requiredEnvironmentVariable("DUO_CLIENT_SECRET");
 
-    configurationPromise = oidc
-      .discovery(new URL(issuer), clientId, clientSecret)
+    configurationPromise = getSecret("DUO_CLIENT_SECRET")
+      .then((clientSecret) => oidc.discovery(new URL(issuer), clientId, clientSecret))
       .catch((error) => {
         configurationPromise = undefined;
         throw error;
