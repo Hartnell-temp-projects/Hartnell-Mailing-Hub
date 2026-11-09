@@ -439,7 +439,15 @@ export default function MessageEditor({ value, mode, onChange }: Props) {
               <button key={color.value} type="button" title={color.name} aria-label={color.name} aria-pressed={colorsMatch(activeFormats.highlightColor, color.value)} onMouseDown={(event) => event.preventDefault()} onClick={() => runCommand(() => editor?.chain().focus().toggleHighlight({ color: color.value }).run() || false)} className={`h-6 w-6 rounded border shadow-sm transition-shadow ${colorsMatch(activeFormats.highlightColor, color.value) ? "border-slate-700 ring-2 ring-amber-300 ring-offset-1" : "border-slate-300"}`} style={{ backgroundColor: color.value }} />
             ))}
           </div>
-          <EditorContent editor={editor} id="body-editor" role="textbox" aria-multiline="true" aria-label="Rich text message body" aria-required="true" className="min-h-[260px] px-3.5 py-2.5 text-sm leading-relaxed text-slate-800 outline-none [&_.ProseMirror]:min-h-[260px] [&_.ProseMirror]:outline-none" />
+          <EditorContent
+            editor={editor}
+            id="body-editor"
+            role="textbox"
+            aria-multiline="true"
+            aria-label="Rich text message body"
+            aria-required="true"
+            className="min-h-[260px] px-3.5 py-2.5 text-sm leading-relaxed text-slate-800 outline-none [&_.ProseMirror]:min-h-[260px] [&_.ProseMirror]:outline-none [&_.ProseMirror_ul]:list-disc [&_.ProseMirror_ul]:pl-6 [&_.ProseMirror_ol]:list-decimal [&_.ProseMirror_ol]:pl-6 [&_.ProseMirror_li]:my-1 [&_.ProseMirror_blockquote]:border-l-4 [&_.ProseMirror_blockquote]:border-slate-300 [&_.ProseMirror_blockquote]:pl-4 [&_.ProseMirror_blockquote]:italic"
+          />
         </div>
       )}
     </div>
