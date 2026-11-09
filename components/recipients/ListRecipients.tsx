@@ -5,6 +5,7 @@ import { RECIPIENT_GROUPS } from "@/lib/recipientLists";
 import { parseRecipientFile } from "@/lib/parseRecipientFile";
 import {
   deleteSavedRecipientList,
+  fetchRedshiftRecipients,
   fetchSavedRecipientLists,
   saveRecipientList,
 } from "@/lib/storage/api";
@@ -26,6 +27,8 @@ export default function ListRecipients({ onRecipientsLoaded }: Props) {
   const [listsLoading, setListsLoading] = useState(true);
   const [listsError, setListsError] = useState<string | null>(null);
   const [savingList, setSavingList] = useState(false);
+  const [groupLoading, setGroupLoading] = useState(false);
+  const groupRequestId = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -60,12 +63,39 @@ export default function ListRecipients({ onRecipientsLoaded }: Props) {
     setListName("");
     setSavedListName(null);
     setUploadError(null);
+    onRecipientsLoaded([]);
+
     const group = RECIPIENT_GROUPS.find((g) => g.id === groupId);
-    if (group) onRecipientsLoaded(group.emails.map((email) => ({ email })));
+    if (!group) return;
+
+    // Ignore results from earlier clicks if the user has since picked something else.
+    const requestId = ++groupRequestId.current;
+    setGroupLoading(true);
+    fetchRedshiftRecipients(group.recipientType)
+      .then((recipients) => {
+        if (requestId !== groupRequestId.current) return;
+        if (recipients.length === 0) {
+          setUploadError(`No recipients were found for ${group.name}.`);
+          return;
+        }
+        onRecipientsLoaded(recipients);
+      })
+      .catch((error: unknown) => {
+        if (requestId !== groupRequestId.current) return;
+        setSelectedGroupId(null);
+        setUploadError(
+          error instanceof Error ? error.message : `Could not load ${group.name}.`
+        );
+      })
+      .finally(() => {
+        if (requestId === groupRequestId.current) setGroupLoading(false);
+      });
   };
 
   const handleFileUpload = async (file: File) => {
     setUploadError(null);
+    groupRequestId.current++;
+    setGroupLoading(false);
     setSelectedGroupId(null);
     setSelectedSavedListId(null);
     try {
@@ -112,6 +142,8 @@ export default function ListRecipients({ onRecipientsLoaded }: Props) {
   };
 
   const handleSavedListSelect = (list: SavedRecipientList) => {
+    groupRequestId.current++;
+    setGroupLoading(false);
     setSelectedGroupId(null);
     setSelectedSavedListId(list.id);
     setUploadedFile(null);
@@ -176,6 +208,12 @@ export default function ListRecipients({ onRecipientsLoaded }: Props) {
           ))}
         </div>
       </div>
+
+      {groupLoading && (
+        <p className="text-xs text-slate-400" role="status">
+          Loading recipients from Redshift…
+        </p>
+      )}
 
       {listsLoading && (
         <p className="text-xs text-slate-400" role="status">
