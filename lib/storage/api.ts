@@ -53,6 +53,30 @@ export function saveRecipientList(input: { name: string; recipients: RecipientRe
   });
 }
 
+/** Runs the Redshift query for a predefined group via /api/db. */
+export async function fetchRedshiftRecipients(
+  recipientType: "faculty" | "student" | "staff"
+): Promise<RecipientRecord[]> {
+  const { body } = await request<{ body: Record<string, string | null>[] }>(
+    `/api/db?recipientType=${encodeURIComponent(recipientType)}`
+  );
+
+  // Expected SQL columns: email, and optionally first_name / last_name.
+  const seen = new Set<string>();
+  const recipients: RecipientRecord[] = [];
+  for (const row of body) {
+    const email = row.email?.trim();
+    if (!email || seen.has(email.toLowerCase())) continue;
+    seen.add(email.toLowerCase());
+    recipients.push({
+      email,
+      firstName: row.first_name ?? undefined,
+      lastName: row.last_name ?? undefined,
+    });
+  }
+  return recipients;
+}
+
 export function deleteSavedRecipientList(id: string) {
   return request<{ deleted: true }>(`/api/recipient-lists/${encodeURIComponent(id)}`, {
     method: "DELETE",

@@ -1,8 +1,11 @@
+export type RecipientType = "faculty" | "student" | "staff";
+
 export interface RecipientGroup {
   id: string;
   name: string;
   description: string;
-  emails: string[];
+  /** Matches the SQL file in lib/sql and the allowlist in /api/db. */
+  recipientType: RecipientType;
 }
 
 export const RECIPIENT_GROUPS: RecipientGroup[] = [
@@ -10,18 +13,18 @@ export const RECIPIENT_GROUPS: RecipientGroup[] = [
     id: "all-faculty",
     name: "All Faculty",
     description: "Full-time & part-time faculty",
-    emails: [],
+    recipientType: "faculty",
   },
   {
     id: "all-staff",
     name: "All Staff",
     description: "Administrative & support staff",
-    emails: [],
+    recipientType: "staff",
   },
   {
     id: "all-students",
     name: "All Students",
     description: "Currently enrolled students",
-    emails: [],
+    recipientType: "student",
   },
 ];

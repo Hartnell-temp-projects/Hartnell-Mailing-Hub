@@ -1,7 +1,6 @@
 import path from 'path';
 import { readFile } from 'fs/promises';
-import { readJsonBody, requireStorageUser } from "@/lib/storage/http";
-import { InvalidInputError } from "@/lib/storage/userData";
+import { requireStorageUser } from "@/lib/storage/http";
 import { DescribeStatementCommand, ExecuteStatementCommand, Field, GetStatementResultCommand, RedshiftDataClient } from "@aws-sdk/client-redshift-data";
 import { AssumeRoleCommand, STSClient } from "@aws-sdk/client-sts";
 import { NextRequest, NextResponse } from "next/server";
@@ -99,35 +98,33 @@ async function executeQuery(redshiftClient: RedshiftDataClient, queryType: strin
     return rows;
 }
 
+// Allowlist: each type maps to lib/sql/<type>.sql. Never build the path from raw input.
+const RECIPIENT_TYPES = ["faculty", "student", "staff"];
+
 export async function GET(request: NextRequest) {
     const user = requireStorageUser(request);
     if (user instanceof NextResponse) return user;
-    
-    let body = undefined;
-    try {
-        const body = await readJsonBody(request);
-    } catch (error) {
-        if (error instanceof InvalidInputError) {
-            return NextResponse.json({ error: error.message }, { status: 400 });
-        }
-        return NextResponse.json({ error: "Something went wrong when reading request payload." }, { status: 500 });
+
+    // GET requests carry no body, so the type comes from ?recipientType=
+    const recipientType = request.nextUrl.searchParams.get("recipientType");
+    if (!recipientType || !RECIPIENT_TYPES.includes(recipientType)) {
+        return NextResponse.json(
+            { error: `recipientType must be one of: ${RECIPIENT_TYPES.join(", ")}.` },
+            { status: 400 }
+        );
     }
-    
-    if (!body) {
-        return NextResponse.json({ error: "No payload given with request."}, { status: 400 });
-    }
-    
-    const { recipientType } = body;
+
     try {
         const redshiftClient = await getRedshiftClient(sts);
         const res = await executeQuery(redshiftClient, recipientType);
         if (res instanceof NextResponse) return res;
 
-        return NextResponse.json({ body: res });
+        return NextResponse.json(
+            { body: res },
+            { headers: { "Cache-Control": "no-store" } }
+        );
     } catch (error) {
-        if (error instanceof QueryError) {
-            return NextResponse.json({ error: error.message }, { status: 500 });
-        }
-        return NextResponse.json({ error: "Temporary error msg" }, { status: 500 });
+        console.error("Redshift recipient query failed:", error);
+        return NextResponse.json({ error: "Unable to load recipients from Redshift." }, { status: 502 });
     }
 }
