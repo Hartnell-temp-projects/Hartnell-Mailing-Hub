@@ -7,6 +7,7 @@ import {
   UpdateTemplateCommand,
 } from "@aws-sdk/client-ses";
 import { getSession } from "@/lib/auth/session";
+import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import type { RecipientRecord } from "@/components/types";
 
 const ses = new SESClient({ region: process.env.AWS_REGION ?? "us-west-2" });
@@ -202,8 +203,9 @@ export async function POST(req: NextRequest) {
   const ccAddresses = asAddresses(cc);
   const bccAddresses = asAddresses(bcc);
   const personalizedRecipients = asRecipientRecords(rawPersonalizedRecipients);
+  const cleanContent = typeof content === "string" ? sanitizeEmailHtml(content) : "";
 
-  if (!content || !subject || (toAddresses.length === 0 && bccAddresses.length === 0)) {
+  if (!cleanContent || typeof subject !== "string" || !subject.trim() || (toAddresses.length === 0 && bccAddresses.length === 0)) {
     return NextResponse.json(
       { error: "content, subject, and at least one recipient are required" },
       { status: 400 }
@@ -218,14 +220,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const invalidFields = validatePersonalizedFields(subject, content, personalizedRecipients);
+    const invalidFields = validatePersonalizedFields(subject, cleanContent, personalizedRecipients);
     if (invalidFields) {
       return NextResponse.json({ error: invalidFields }, { status: 400 });
     }
 
     const result = await sendPersonalizedEmail({
       subject,
-      content,
+      content: cleanContent,
       to: toAddresses,
       cc: ccAddresses,
       personalizedRecipients,
@@ -254,7 +256,7 @@ export async function POST(req: NextRequest) {
     },
     Message: {
       Subject: { Data: subject },
-      Body: { Html: { Data: content } },
+      Body: { Html: { Data: cleanContent } },
     },
   });
 

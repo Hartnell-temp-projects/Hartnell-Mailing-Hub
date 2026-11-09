@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Extension, type Editor } from "@tiptap/core";
+import Highlight from "@tiptap/extension-highlight";
+import TextAlign from "@tiptap/extension-text-align";
+import { TextStyle } from "@tiptap/extension-text-style";
+import { EditorContent, useEditor } from "@tiptap/react";
+import StarterKit from "@tiptap/starter-kit";
+import { useEffect, useMemo, useState } from "react";
+import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import { EditorMode } from "./types";
 
 interface Props {
@@ -19,9 +26,9 @@ const HIGHLIGHT_COLORS = [
 ];
 
 const FONT_SIZE_OPTIONS = [
-  { label: "Small", value: "2" },
-  { label: "Normal", value: "3" },
-  { label: "Large", value: "5" },
+  { label: "Small", value: "14px" },
+  { label: "Normal", value: "16px" },
+  { label: "Large", value: "20px" },
 ];
 
 const BLOCK_STYLE_OPTIONS = [
@@ -33,10 +40,10 @@ const BLOCK_STYLE_OPTIONS = [
 ];
 
 const ALIGNMENT_OPTIONS = [
-  { label: "Align left", value: "left", command: "justifyLeft" },
-  { label: "Center", value: "center", command: "justifyCenter" },
-  { label: "Align right", value: "right", command: "justifyRight" },
-  { label: "Justify", value: "justify", command: "justifyFull" },
+  { label: "Align left", value: "left" },
+  { label: "Center", value: "center" },
+  { label: "Align right", value: "right" },
+  { label: "Justify", value: "justify" },
 ];
 
 const RECIPIENT_VARIABLES = [
@@ -59,22 +66,84 @@ interface ActiveFormats {
   highlightColor: string;
 }
 
-function getEditableBody(value: string) {
-  if (!FULL_DOCUMENT_PATTERN.test(value.trim())) {
-    return value;
-  }
+const FontSize = Extension.create({
+  name: "fontSize",
 
-  const document = new DOMParser().parseFromString(value, "text/html");
-  return document.body.innerHTML;
+  addGlobalAttributes() {
+    return [
+      {
+        types: ["textStyle"],
+        attributes: {
+          fontSize: {
+            default: null,
+            parseHTML: (element: HTMLElement) => element.style.fontSize || null,
+            renderHTML: (attributes: { fontSize?: string | null }) => {
+              if (!attributes.fontSize) return {};
+              return { style: `font-size: ${attributes.fontSize}` };
+            },
+          },
+        },
+      },
+    ];
+  },
+});
+
+const EDITOR_EXTENSIONS = [
+  StarterKit.configure({
+    link: {
+      autolink: false,
+      openOnClick: false,
+      protocols: ["http", "https", "mailto"],
+    },
+  }),
+  TextStyle,
+  FontSize,
+  Highlight.configure({ multicolor: true }),
+  TextAlign.configure({ types: ["heading", "paragraph", "blockquote"] }),
+];
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
-function getBlockStyle(value: string) {
-  return value.replace(/[<>]/g, "").toLowerCase();
+function getEditableContent(value: string) {
+  const trimmedValue = value.trim();
+  if (!trimmedValue) return "<p></p>";
+  if (/<[a-z][\s\S]*>/i.test(trimmedValue)) return value;
+  return `<p>${escapeHtml(value).replace(/\r?\n/g, "<br />")}</p>`;
 }
 
-function isHighlighted(value: string) {
-  const normalized = value.replace(/\s/g, "").toLowerCase();
-  return !["", "transparent", "rgba(0,0,0,0)", "rgb(255,255,255)"].includes(normalized);
+function getBlockStyle(editor: Editor) {
+  if (editor.isActive("heading", { level: 1 })) return "h1";
+  if (editor.isActive("heading", { level: 2 })) return "h2";
+  if (editor.isActive("heading", { level: 3 })) return "h3";
+  if (editor.isActive("blockquote")) return "blockquote";
+  return "p";
+}
+
+function getActiveFormats(editor: Editor): ActiveFormats {
+  const textStyle = editor.getAttributes("textStyle") as { fontSize?: string };
+  const highlight = editor.getAttributes("highlight") as { color?: string };
+  const alignment = ALIGNMENT_OPTIONS.find((option) => editor.isActive({ textAlign: option.value }))?.value || "left";
+
+  return {
+    bold: editor.isActive("bold"),
+    italic: editor.isActive("italic"),
+    underline: editor.isActive("underline"),
+    strikeThrough: editor.isActive("strike"),
+    bulletList: editor.isActive("bulletList"),
+    numberedList: editor.isActive("orderedList"),
+    fontSize: textStyle.fontSize || "",
+    blockStyle: getBlockStyle(editor),
+    alignment,
+    highlighted: editor.isActive("highlight"),
+    highlightColor: highlight.color || "",
+  };
 }
 
 function colorsMatch(first: string, second: string) {
@@ -82,47 +151,13 @@ function colorsMatch(first: string, second: string) {
   const normalizedFirst = normalize(first);
   const normalizedSecond = normalize(second);
 
-  if (normalizedFirst === normalizedSecond) {
-    return true;
-  }
-  if (!normalizedSecond.startsWith("#") || normalizedSecond.length !== 7) {
-    return false;
-  }
+  if (normalizedFirst === normalizedSecond) return true;
+  if (!normalizedSecond.startsWith("#") || normalizedSecond.length !== 7) return false;
 
   const red = parseInt(normalizedSecond.slice(1, 3), 16);
   const green = parseInt(normalizedSecond.slice(3, 5), 16);
   const blue = parseInt(normalizedSecond.slice(5, 7), 16);
   return normalizedFirst === `rgb(${red},${green},${blue})`;
-}
-
-function getActiveFormats(): ActiveFormats {
-  let alignment = "left";
-  if (document.queryCommandState("justifyCenter")) {
-    alignment = "center";
-  }
-  if (document.queryCommandState("justifyRight")) { 
-    alignment = "right";
-  }
-  if (document.queryCommandState("justifyFull")) {
-    alignment = "justify";
-  }
-
-  const highlightColor =
-    document.queryCommandValue("hiliteColor") || document.queryCommandValue("backColor");
-
-  return {
-    bold: document.queryCommandState("bold"),
-    italic: document.queryCommandState("italic"),
-    underline: document.queryCommandState("underline"),
-    strikeThrough: document.queryCommandState("strikeThrough"),
-    bulletList: document.queryCommandState("insertUnorderedList"),
-    numberedList: document.queryCommandState("insertOrderedList"),
-    fontSize: document.queryCommandValue("fontSize"),
-    blockStyle: getBlockStyle(document.queryCommandValue("formatBlock")),
-    alignment,
-    highlighted: isHighlighted(highlightColor),
-    highlightColor,
-  };
 }
 
 function AlignmentIcon({ alignment }: { alignment: string }) {
@@ -160,9 +195,7 @@ function ToolbarButton({
       onMouseDown={(event) => event.preventDefault()}
       onClick={onClick}
       className={`rounded-md px-2.5 py-1.5 text-sm font-semibold transition-colors ${
-        active
-          ? "bg-rose-100 text-[#8c1d40] ring-1 ring-inset ring-rose-200"
-          : "text-slate-600 hover:bg-white hover:text-[#8c1d40]"
+        active ? "bg-rose-100 text-[#8c1d40] ring-1 ring-inset ring-rose-200" : "text-slate-600 hover:bg-white hover:text-[#8c1d40]"
       }`}
     >
       {label}
@@ -171,8 +204,6 @@ function ToolbarButton({
 }
 
 export default function MessageEditor({ value, mode, onChange }: Props) {
-  const editorRef = useRef<HTMLDivElement>(null);
-  const fullDocumentRef = useRef<string | null>(null);
   const [fontSizeMenuOpen, setFontSizeMenuOpen] = useState(false);
   const [blockStyleMenuOpen, setBlockStyleMenuOpen] = useState(false);
   const [alignmentMenuOpen, setAlignmentMenuOpen] = useState(false);
@@ -191,109 +222,111 @@ export default function MessageEditor({ value, mode, onChange }: Props) {
     highlightColor: "",
   });
 
+  const isFullDocument = FULL_DOCUMENT_PATTERN.test(value.trim());
+  const showHtmlSource = mode === "html" || isFullDocument;
+  const initialContent = useMemo(() => getEditableContent(value), [value]);
+  const editor = useEditor({
+    extensions: EDITOR_EXTENSIONS,
+    content: initialContent,
+    immediatelyRender: false,
+    onUpdate: ({ editor: updatedEditor }) => {
+      onChange(sanitizeEmailHtml(updatedEditor.getHTML()));
+      setActiveFormats(getActiveFormats(updatedEditor));
+    },
+  });
+
   useEffect(() => {
-    if (mode !== "rich" || !editorRef.current) {
+    if (!editor || showHtmlSource) {
       return;
     }
 
-    const isFullDocument = FULL_DOCUMENT_PATTERN.test(value.trim());
-    fullDocumentRef.current = isFullDocument ? value : null;
-
-    const editableBody = getEditableBody(value);
-    if (editorRef.current.innerHTML !== editableBody) {
-      editorRef.current.innerHTML = editableBody;
+    const nextContent = getEditableContent(value);
+    if (editor.getHTML() !== nextContent) {
+      editor.commands.setContent(nextContent, { emitUpdate: false });
     }
-  }, [mode, value]);
+  }, [editor, showHtmlSource, value]);
 
   useEffect(() => {
-    const updateActiveFormats = () => {
-      const editor = editorRef.current;
-      const selection = window.getSelection();
-
-      if (!editor || !selection || !editor.contains(selection.anchorNode)) return;
-
-      setActiveFormats(getActiveFormats());
-    };
-
-    document.addEventListener("selectionchange", updateActiveFormats);
-    return () => document.removeEventListener("selectionchange", updateActiveFormats);
-  }, []);
-
-  const emitEditorChange = () => {
-    const editor = editorRef.current;
     if (!editor) {
       return;
     }
 
-    const editedBody = editor.innerHTML;
-    setActiveFormats(getActiveFormats());
+    const updateActiveFormats = () => setActiveFormats(getActiveFormats(editor));
+    editor.on("selectionUpdate", updateActiveFormats);
+    editor.on("transaction", updateActiveFormats);
+    updateActiveFormats();
 
-    if (!fullDocumentRef.current) {
-      onChange(editedBody);
+    return () => {
+      editor.off("selectionUpdate", updateActiveFormats);
+      editor.off("transaction", updateActiveFormats);
+    };
+  }, [editor]);
+
+  const runCommand = (command: () => boolean) => {
+    if (!editor) {
       return;
     }
-
-    const parsedDocument = new DOMParser().parseFromString(fullDocumentRef.current, "text/html");
-    parsedDocument.body.innerHTML = editedBody;
-    onChange(`<!doctype html>\n${parsedDocument.documentElement.outerHTML}`);
-  };
-
-  const runCommand = (command: string, commandValue?: string) => {
-    editorRef.current?.focus();
-    document.execCommand(command, false, commandValue);
-    emitEditorChange();
+    command();
+    setActiveFormats(getActiveFormats(editor));
   };
 
   const handleInsertLink = () => {
-    const selection = window.getSelection();
-    const savedRange = selection && selection.rangeCount > 0
-      ? selection.getRangeAt(0).cloneRange()
-      : null;
-    const url = window.prompt("Enter the URL for the selected text:", "https://");
-    if (!url) return;
-
-    editorRef.current?.focus();
-    if (savedRange && selection) {
-      selection.removeAllRanges();
-      selection.addRange(savedRange);
+    if (!editor) {
+      return;
     }
 
-    document.execCommand("createLink", false, url.trim());
-
-    if (editorRef.current && selection && selection.rangeCount > 0) {
-      const range = selection.getRangeAt(0);
-      editorRef.current.querySelectorAll("a").forEach((link) => {
-        if (range.intersectsNode(link)) {
-          link.target = "_blank";
-          link.rel = "noopener noreferrer";
-        }
-      });
+    const currentUrl = editor.getAttributes("link").href || "https://";
+    const url = window.prompt("Enter the URL for the selected text:", currentUrl);
+    if (!url) {
+      return;
     }
 
-    emitEditorChange();
+    runCommand(() => editor.chain().focus().setLink({
+      href: url.trim(),
+      target: "_blank",
+      rel: "noopener noreferrer",
+    }).run());
   };
 
-  const handleBlockStyle = (value: string) => {
-    runCommand("formatBlock", `<${value}>`);
+  const handleBlockStyle = (style: string) => {
+    if (!editor) {
+      return;
+    }
+
+    runCommand(() => {
+      if (style === "p") {
+        return editor.chain().focus().setParagraph().run();
+      }
+      if (style === "blockquote") {
+        return editor.chain().focus().toggleBlockquote().run();
+      }
+      return editor.chain().focus().toggleHeading({ level: Number(style.slice(1)) as 1 | 2 | 3 }).run();
+    });
     setBlockStyleMenuOpen(false);
   };
 
-  const handleAlignment = (command: string) => {
-    runCommand(command);
+  const handleAlignment = (alignment: string) => {
+    if (!editor) {
+      return;
+    }
+    runCommand(() => editor.chain().focus().setTextAlign(alignment).run());
     setAlignmentMenuOpen(false);
   };
 
   const handleHighlight = () => {
-    runCommand(
-      "hiliteColor",
-      activeFormats.highlighted ? "transparent" : HIGHLIGHT_COLORS[0].value
-    );
+    if (!editor) {
+      return;
+    }
+    runCommand(() => activeFormats.highlighted
+      ? editor.chain().focus().unsetHighlight().run()
+      : editor.chain().focus().toggleHighlight({ color: HIGHLIGHT_COLORS[0].value }).run());
   };
 
-  const handleInsertRecipientVariable = (value: string) => {
-    editorRef.current?.focus();
-    document.execCommand("insertText", false, value);
-    emitEditorChange();
+  const handleInsertRecipientVariable = (recipientVariable: string) => {
+    if (!editor) {
+      return;
+    }
+    runCommand(() => editor.chain().focus().insertContent(recipientVariable).run());
     setRecipientVariableMenuOpen(false);
   };
 
@@ -301,234 +334,16 @@ export default function MessageEditor({ value, mode, onChange }: Props) {
     <div>
       <div className="mb-1.5 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <label
-            htmlFor={mode === "rich" ? "body-editor" : "body-html"}
-            className="block text-sm font-semibold uppercase tracking-wide text-slate-600"
-          >
+          <label htmlFor={showHtmlSource ? "body-html" : "body-editor"} className="block text-sm font-semibold uppercase tracking-wide text-slate-600">
             Message Body <span className="text-red-500">*</span>
           </label>
           <p className="mt-1 text-xs text-slate-400">
-            Use the formatting tools to edit your message.
+            {isFullDocument ? "This full HTML template is preserved as source so its email layout is not damaged." : "Use the formatting tools to edit your message."}
           </p>
         </div>
       </div>
 
-      {mode === "rich" ? (
-        <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm focus-within:border-transparent focus-within:ring-2 focus-within:ring-blue-500">
-          <div className="flex flex-wrap items-center gap-1 border-b border-slate-100 bg-slate-50 p-2" role="toolbar" aria-label="Text formatting toolbar">
-            <ToolbarButton label="↶" title="Undo" onClick={() => runCommand("undo")} />
-            <ToolbarButton label="↷" title="Redo" onClick={() => runCommand("redo")} />
-            <span className="mx-1 h-5 w-px bg-slate-200" aria-hidden="true" />
-            <ToolbarButton label="B" title="Bold" active={activeFormats.bold} onClick={() => runCommand("bold")} />
-            <ToolbarButton label="I" title="Italic" active={activeFormats.italic} onClick={() => runCommand("italic")} />
-            <ToolbarButton label="U" title="Underline" active={activeFormats.underline} onClick={() => runCommand("underline")} />
-            <ToolbarButton label="S" title="Strikethrough" active={activeFormats.strikeThrough} onClick={() => runCommand("strikeThrough")} />
-            <span className="mx-1 h-5 w-px bg-slate-200" aria-hidden="true" />
-            <ToolbarButton label="• List" title="Bullet list" active={activeFormats.bulletList} onClick={() => runCommand("insertUnorderedList")} />
-            <ToolbarButton label="1. List" title="Numbered list" active={activeFormats.numberedList} onClick={() => runCommand("insertOrderedList")} />
-            <ToolbarButton label="Link" title="Add link to selected text" onClick={handleInsertLink} />
-            <div className="relative">
-              <button
-                type="button"
-                title="Insert recipient name"
-                aria-label="Insert recipient name"
-                aria-haspopup="menu"
-                aria-expanded={recipientVariableMenuOpen}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => setRecipientVariableMenuOpen((open) => !open)}
-                className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-white hover:text-[#8c1d40]"
-              >
-                <span aria-hidden="true">@</span>
-                <span>Recipient name</span>
-                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
-                </svg>
-              </button>
-              {recipientVariableMenuOpen && (
-                <div className="absolute left-0 top-full z-10 mt-1 min-w-36 rounded-lg border border-slate-200 bg-white p-1 shadow-lg" role="menu">
-                  {RECIPIENT_VARIABLES.map((variable) => (
-                    <button
-                      key={variable.value}
-                      type="button"
-                      role="menuitem"
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => handleInsertRecipientVariable(variable.value)}
-                      className="flex w-full items-center justify-between rounded-md px-2.5 py-2 text-left text-sm text-slate-600 transition-colors hover:bg-rose-50 hover:text-[#8c1d40]"
-                    >
-                      <span>{variable.label}</span>
-                      <code className="ml-3 text-[11px] text-slate-400">{variable.value}</code>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            <ToolbarButton label="Clear" title="Clear formatting" onClick={() => runCommand("removeFormat")} />
-            <span className="mx-1 h-5 w-px bg-slate-200" aria-hidden="true" />
-            <div className="relative">
-              <button
-                type="button"
-                title="Change text alignment"
-                aria-label="Change text alignment"
-                aria-haspopup="menu"
-                aria-expanded={alignmentMenuOpen}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => setAlignmentMenuOpen((open) => !open)}
-                className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-white hover:text-[#8c1d40]"
-              >
-                <AlignmentIcon alignment={activeFormats.alignment} />
-                <span>{ALIGNMENT_OPTIONS.find((option) => option.value === activeFormats.alignment)?.label || "Alignment"}</span>
-                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
-                </svg>
-              </button>
-              {alignmentMenuOpen && (
-                <div className="absolute left-0 top-full z-10 mt-1 min-w-36 rounded-lg border border-slate-200 bg-white p-1 shadow-lg" role="menu">
-                  {ALIGNMENT_OPTIONS.map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      role="menuitem"
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => handleAlignment(option.command)}
-                      className={`flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition-colors hover:bg-rose-50 hover:text-[#8c1d40] ${
-                        activeFormats.alignment === option.value
-                          ? "bg-rose-50 font-semibold text-[#8c1d40]"
-                          : "text-slate-600"
-                      }`}
-                    >
-                      <AlignmentIcon alignment={option.value} />
-                      {option.label}
-                      {activeFormats.alignment === option.value && <span className="ml-auto" aria-hidden="true">✓</span>}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            <span className="mx-1 h-5 w-px bg-slate-200" aria-hidden="true" />
-            <div className="relative">
-              <button
-                type="button"
-                title="Change text size"
-                aria-label="Change text size"
-                aria-haspopup="menu"
-                aria-expanded={fontSizeMenuOpen}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => setFontSizeMenuOpen((open) => !open)}
-                className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-white hover:text-[#8c1d40]"
-              >
-                <span className="text-sm font-bold">T</span>
-                <span>
-                  {FONT_SIZE_OPTIONS.find((option) => option.value === activeFormats.fontSize)?.label || "Text size"}
-                </span>
-                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
-                </svg>
-              </button>
-              {fontSizeMenuOpen && (
-                <div className="absolute left-0 top-full z-10 mt-1 min-w-28 rounded-lg border border-slate-200 bg-white p-1 shadow-lg" role="menu">
-                  {FONT_SIZE_OPTIONS.map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      role="menuitem"
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => {
-                        runCommand("fontSize", option.value);
-                        setFontSizeMenuOpen(false);
-                      }}
-                      className={`flex w-full items-center justify-between rounded-md px-2.5 py-2 text-left text-sm transition-colors hover:bg-rose-50 hover:text-[#8c1d40] ${
-                        activeFormats.fontSize === option.value
-                          ? "bg-rose-50 font-semibold text-[#8c1d40]"
-                          : "text-slate-600"
-                      }`}
-                    >
-                      {option.label}
-                      {activeFormats.fontSize === option.value && <span aria-hidden="true">✓</span>}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            <span className="mx-1 h-5 w-px bg-slate-200" aria-hidden="true" />
-            <div className="relative">
-              <button
-                type="button"
-                title="Change paragraph style"
-                aria-label="Change paragraph style"
-                aria-haspopup="menu"
-                aria-expanded={blockStyleMenuOpen}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => setBlockStyleMenuOpen((open) => !open)}
-                className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-white hover:text-[#8c1d40]"
-              >
-                <span>
-                  {BLOCK_STYLE_OPTIONS.find((option) => option.value === activeFormats.blockStyle)?.label || "Style"}
-                </span>
-                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
-                </svg>
-              </button>
-              {blockStyleMenuOpen && (
-                <div className="absolute left-0 top-full z-10 mt-1 min-w-32 rounded-lg border border-slate-200 bg-white p-1 shadow-lg" role="menu">
-                  {BLOCK_STYLE_OPTIONS.map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      role="menuitem"
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => handleBlockStyle(option.value)}
-                      className={`flex w-full items-center justify-between rounded-md px-2.5 py-2 text-left text-sm transition-colors hover:bg-rose-50 hover:text-[#8c1d40] ${
-                        activeFormats.blockStyle === option.value
-                          ? "bg-rose-50 font-semibold text-[#8c1d40]"
-                          : "text-slate-600"
-                      }`}
-                    >
-                      {option.label}
-                      {activeFormats.blockStyle === option.value && <span aria-hidden="true">✓</span>}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            <span className="mx-1 h-5 w-px bg-slate-200" aria-hidden="true" />
-            <ToolbarButton
-              label={activeFormats.highlighted ? "Highlighted" : "Highlight"}
-              title={activeFormats.highlighted ? "Remove highlight" : "Highlight selected text"}
-              active={activeFormats.highlighted}
-              onClick={handleHighlight}
-            />
-            {HIGHLIGHT_COLORS.map((color) => (
-              <button
-                key={color.value}
-                type="button"
-                title={color.name}
-                aria-label={color.name}
-                aria-pressed={colorsMatch(activeFormats.highlightColor, color.value)}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => runCommand("hiliteColor", color.value)}
-                className={`h-6 w-6 rounded border shadow-sm transition-shadow ${
-                  colorsMatch(activeFormats.highlightColor, color.value)
-                    ? "border-slate-700 ring-2 ring-amber-300 ring-offset-1"
-                    : "border-slate-300"
-                }`}
-                style={{ backgroundColor: color.value }}
-              />
-            ))}
-          </div>
-          <div
-            id="body-editor"
-            ref={editorRef}
-            contentEditable
-            suppressContentEditableWarning
-            role="textbox"
-            aria-multiline="true"
-            aria-label="Rich text message body"
-            aria-required="true"
-            onInput={emitEditorChange}
-            className="min-h-[260px] px-3.5 py-2.5 text-sm leading-relaxed text-slate-800 outline-none empty:before:text-slate-400 empty:before:content-['Write_your_message_here...']"
-          />
-        </div>
-      ) : (
+      {showHtmlSource ? (
         <textarea
           id="body-html"
           value={value}
@@ -540,6 +355,92 @@ export default function MessageEditor({ value, mode, onChange }: Props) {
           aria-required="true"
           className="w-full resize-y rounded-lg border border-slate-200 px-3.5 py-2.5 font-mono text-xs leading-relaxed text-slate-800 placeholder:text-slate-400 shadow-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
         />
+      ) : (
+        <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm focus-within:border-transparent focus-within:ring-2 focus-within:ring-blue-500">
+          <div className="flex flex-wrap items-center gap-1 border-b border-slate-100 bg-slate-50 p-2" role="toolbar" aria-label="Text formatting toolbar">
+            <ToolbarButton label="↶" title="Undo" onClick={() => runCommand(() => editor?.chain().focus().undo().run() || false)} />
+            <ToolbarButton label="↷" title="Redo" onClick={() => runCommand(() => editor?.chain().focus().redo().run() || false)} />
+            <span className="mx-1 h-5 w-px bg-slate-200" aria-hidden="true" />
+            <ToolbarButton label="B" title="Bold" active={activeFormats.bold} onClick={() => runCommand(() => editor?.chain().focus().toggleBold().run() || false)} />
+            <ToolbarButton label="I" title="Italic" active={activeFormats.italic} onClick={() => runCommand(() => editor?.chain().focus().toggleItalic().run() || false)} />
+            <ToolbarButton label="U" title="Underline" active={activeFormats.underline} onClick={() => runCommand(() => editor?.chain().focus().toggleUnderline().run() || false)} />
+            <ToolbarButton label="S" title="Strikethrough" active={activeFormats.strikeThrough} onClick={() => runCommand(() => editor?.chain().focus().toggleStrike().run() || false)} />
+            <span className="mx-1 h-5 w-px bg-slate-200" aria-hidden="true" />
+            <ToolbarButton label="• List" title="Bullet list" active={activeFormats.bulletList} onClick={() => runCommand(() => editor?.chain().focus().toggleBulletList().run() || false)} />
+            <ToolbarButton label="1. List" title="Numbered list" active={activeFormats.numberedList} onClick={() => runCommand(() => editor?.chain().focus().toggleOrderedList().run() || false)} />
+            <ToolbarButton label="Link" title="Add link to selected text" onClick={handleInsertLink} />
+            <div className="relative">
+              <button type="button" title="Insert recipient name" aria-label="Insert recipient name" aria-haspopup="menu" aria-expanded={recipientVariableMenuOpen} onMouseDown={(event) => event.preventDefault()} onClick={() => setRecipientVariableMenuOpen((open) => !open)} className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-white hover:text-[#8c1d40]">
+                <span aria-hidden="true">@</span><span>Recipient name</span>
+                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" /></svg>
+              </button>
+              {recipientVariableMenuOpen && (
+                <div className="absolute left-0 top-full z-10 mt-1 min-w-36 rounded-lg border border-slate-200 bg-white p-1 shadow-lg" role="menu">
+                  {RECIPIENT_VARIABLES.map((variable) => (
+                    <button key={variable.value} type="button" role="menuitem" onMouseDown={(event) => event.preventDefault()} onClick={() => handleInsertRecipientVariable(variable.value)} className="flex w-full items-center justify-between rounded-md px-2.5 py-2 text-left text-sm text-slate-600 transition-colors hover:bg-rose-50 hover:text-[#8c1d40]">
+                      <span>{variable.label}</span><code className="ml-3 text-[11px] text-slate-400">{variable.value}</code>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <ToolbarButton label="Clear" title="Clear formatting" onClick={() => runCommand(() => editor?.chain().focus().clearNodes().unsetAllMarks().run() || false)} />
+            <span className="mx-1 h-5 w-px bg-slate-200" aria-hidden="true" />
+            <div className="relative">
+              <button type="button" title="Change text alignment" aria-label="Change text alignment" aria-haspopup="menu" aria-expanded={alignmentMenuOpen} onMouseDown={(event) => event.preventDefault()} onClick={() => setAlignmentMenuOpen((open) => !open)} className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-white hover:text-[#8c1d40]">
+                <AlignmentIcon alignment={activeFormats.alignment} /><span>{ALIGNMENT_OPTIONS.find((option) => option.value === activeFormats.alignment)?.label || "Alignment"}</span>
+                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" /></svg>
+              </button>
+              {alignmentMenuOpen && (
+                <div className="absolute left-0 top-full z-10 mt-1 min-w-36 rounded-lg border border-slate-200 bg-white p-1 shadow-lg" role="menu">
+                  {ALIGNMENT_OPTIONS.map((option) => (
+                    <button key={option.value} type="button" role="menuitem" onMouseDown={(event) => event.preventDefault()} onClick={() => handleAlignment(option.value)} className={`flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition-colors hover:bg-rose-50 hover:text-[#8c1d40] ${activeFormats.alignment === option.value ? "bg-rose-50 font-semibold text-[#8c1d40]" : "text-slate-600"}`}>
+                      <AlignmentIcon alignment={option.value} />{option.label}{activeFormats.alignment === option.value && <span className="ml-auto" aria-hidden="true">✓</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <span className="mx-1 h-5 w-px bg-slate-200" aria-hidden="true" />
+            <div className="relative">
+              <button type="button" title="Change text size" aria-label="Change text size" aria-haspopup="menu" aria-expanded={fontSizeMenuOpen} onMouseDown={(event) => event.preventDefault()} onClick={() => setFontSizeMenuOpen((open) => !open)} className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-white hover:text-[#8c1d40]">
+                <span className="text-sm font-bold">T</span><span>{FONT_SIZE_OPTIONS.find((option) => option.value === activeFormats.fontSize)?.label || "Text size"}</span>
+                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" /></svg>
+              </button>
+              {fontSizeMenuOpen && (
+                <div className="absolute left-0 top-full z-10 mt-1 min-w-28 rounded-lg border border-slate-200 bg-white p-1 shadow-lg" role="menu">
+                  {FONT_SIZE_OPTIONS.map((option) => (
+                    <button key={option.value} type="button" role="menuitem" onMouseDown={(event) => event.preventDefault()} onClick={() => { runCommand(() => editor?.chain().focus().setMark("textStyle", { fontSize: option.value }).run() || false); setFontSizeMenuOpen(false); }} className={`flex w-full items-center justify-between rounded-md px-2.5 py-2 text-left text-sm transition-colors hover:bg-rose-50 hover:text-[#8c1d40] ${activeFormats.fontSize === option.value ? "bg-rose-50 font-semibold text-[#8c1d40]" : "text-slate-600"}`}>
+                      {option.label}{activeFormats.fontSize === option.value && <span aria-hidden="true">✓</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <span className="mx-1 h-5 w-px bg-slate-200" aria-hidden="true" />
+            <div className="relative">
+              <button type="button" title="Change paragraph style" aria-label="Change paragraph style" aria-haspopup="menu" aria-expanded={blockStyleMenuOpen} onMouseDown={(event) => event.preventDefault()} onClick={() => setBlockStyleMenuOpen((open) => !open)} className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-white hover:text-[#8c1d40]">
+                <span>{BLOCK_STYLE_OPTIONS.find((option) => option.value === activeFormats.blockStyle)?.label || "Style"}</span>
+                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" /></svg>
+              </button>
+              {blockStyleMenuOpen && (
+                <div className="absolute left-0 top-full z-10 mt-1 min-w-32 rounded-lg border border-slate-200 bg-white p-1 shadow-lg" role="menu">
+                  {BLOCK_STYLE_OPTIONS.map((option) => (
+                    <button key={option.value} type="button" role="menuitem" onMouseDown={(event) => event.preventDefault()} onClick={() => handleBlockStyle(option.value)} className={`flex w-full items-center justify-between rounded-md px-2.5 py-2 text-left text-sm transition-colors hover:bg-rose-50 hover:text-[#8c1d40] ${activeFormats.blockStyle === option.value ? "bg-rose-50 font-semibold text-[#8c1d40]" : "text-slate-600"}`}>
+                      {option.label}{activeFormats.blockStyle === option.value && <span aria-hidden="true">✓</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <span className="mx-1 h-5 w-px bg-slate-200" aria-hidden="true" />
+            <ToolbarButton label={activeFormats.highlighted ? "Highlighted" : "Highlight"} title={activeFormats.highlighted ? "Remove highlight" : "Highlight selected text"} active={activeFormats.highlighted} onClick={handleHighlight} />
+            {HIGHLIGHT_COLORS.map((color) => (
+              <button key={color.value} type="button" title={color.name} aria-label={color.name} aria-pressed={colorsMatch(activeFormats.highlightColor, color.value)} onMouseDown={(event) => event.preventDefault()} onClick={() => runCommand(() => editor?.chain().focus().toggleHighlight({ color: color.value }).run() || false)} className={`h-6 w-6 rounded border shadow-sm transition-shadow ${colorsMatch(activeFormats.highlightColor, color.value) ? "border-slate-700 ring-2 ring-amber-300 ring-offset-1" : "border-slate-300"}`} style={{ backgroundColor: color.value }} />
+            ))}
+          </div>
+          <EditorContent editor={editor} id="body-editor" role="textbox" aria-multiline="true" aria-label="Rich text message body" aria-required="true" className="min-h-[260px] px-3.5 py-2.5 text-sm leading-relaxed text-slate-800 outline-none [&_.ProseMirror]:min-h-[260px] [&_.ProseMirror]:outline-none" />
+        </div>
       )}
     </div>
   );

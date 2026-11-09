@@ -1,4 +1,5 @@
 import { EmailTag } from "./types";
+import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 
 interface Props {
   to: EmailTag[];
@@ -49,12 +50,14 @@ function createPreviewDocument(body: string) {
   const trimmedBody = body.trim();
   const isFullDocument = /<!doctype\s+html|<html[\s>]/i.test(trimmedBody);
   if (isFullDocument) {
-    return replaceRecipientTokens(body);
+    return sanitizeEmailHtml(replaceRecipientTokens(body));
   }
 
   const previewBody = replaceNonBreakingSpaces(replaceRecipientTokens(body));
   const hasMarkup = /<[a-z][\s\S]*>/i.test(previewBody);
-  const content = hasMarkup ? previewBody : escapeHtml(previewBody).replace(/\r?\n/g, "<br />");
+  const content = hasMarkup
+    ? sanitizeEmailHtml(previewBody)
+    : escapeHtml(previewBody).replace(/\r?\n/g, "<br />");
 
   return `<!doctype html>
   <html lang="en">
