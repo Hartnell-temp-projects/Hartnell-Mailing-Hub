@@ -86,7 +86,7 @@ export function userFolderName(user: StorageUser): string {
 }
 
 async function claimFolder(folderId: string, subject: string): Promise<void> {
-  const client = getBoxClient();
+  const client = await getBoxClient();
   const folder = await client.folders.getFolderById(folderId, {
     queryParams: { fields: ["description"] },
   });
@@ -113,7 +113,7 @@ async function resolveUserFolderId(user: StorageUser): Promise<string> {
     return cached;
   }
 
-  const client = getBoxClient();
+  const client = await getBoxClient();
   const name = userFolderName(user);
   let folderId: string;
 
@@ -164,7 +164,7 @@ interface StoredFileRef {
 }
 
 async function findFile(folderId: string, fileName: string): Promise<StoredFileRef | undefined> {
-  const client = getBoxClient();
+  const client = await getBoxClient();
   let offset = 0;
 
   for (;;) {
@@ -187,7 +187,7 @@ async function findFile(folderId: string, fileName: string): Promise<StoredFileR
 }
 
 async function downloadJsonArray(fileId: string, fileName: string): Promise<unknown[]> {
-  const stream = await getBoxClient().downloads.downloadFile(fileId);
+  const stream = await (await getBoxClient()).downloads.downloadFile(fileId);
   if (!stream) {
     return [];
   }
@@ -242,7 +242,7 @@ export async function updateCollection<T>(
   mutate: (items: T[]) => T[] | null
 ): Promise<T[]> {
   return withUserFolder(user, async (folderId) => {
-    const client = getBoxClient();
+    const client = await getBoxClient();
 
     for (let attempt = 0; attempt < MAX_WRITE_ATTEMPTS; attempt++) {
       const file = await findFile(folderId, fileName);

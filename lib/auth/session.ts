@@ -1,5 +1,14 @@
-import { randomUUID } from "node:crypto";
 import type { NextRequest, NextResponse } from "next/server";
+import { EncryptJWT, jwtDecrypt } from "jose";
+import { getSecret } from "@/lib/secrets";
+
+// Stateless sessions: the session and the in-flight OIDC transaction live in
+// encrypted cookies (JWE, dir + A256GCM), so any server instance can read them.
+// This works on serverless hosts where in-memory state does not survive between requests.
+//
+// SESSION_SECRET must be a base64-encoded 32-byte key, e.g. `openssl rand -base64 32`.
+// Logout clears the cookie but cannot revoke a copied one before it expires;
+// rotating SESSION_SECRET invalidates every session.
 
 export const SESSION_COOKIE = "hartnell_mailer_session";
 export const OIDC_TRANSACTION_COOKIE = "hartnell_mailer_oidc_transaction";
@@ -7,160 +16,126 @@ export const OIDC_TRANSACTION_COOKIE = "hartnell_mailer_oidc_transaction";
 const SESSION_TTL_SECONDS = 8 * 60 * 60;
 const OIDC_TRANSACTION_TTL_SECONDS = 10 * 60;
 
+// Audiences keep one cookie type from being accepted as the other.
+const SESSION_AUDIENCE = "hartnell-mailer:session";
+const TRANSACTION_AUDIENCE = "hartnell-mailer:oidc-transaction";
+
 export interface AuthSession {
-  id: string;
   subject: string;
   email?: string;
   name?: string;
-  accessToken: string;
-  refreshToken?: string;
-  createdAt: number;
-  expiresAt: number;
 }
 
-interface OidcTransaction {
+export interface OidcTransaction {
   state: string;
   codeVerifier: string;
   nonce: string;
-  createdAt: number;
 }
 
-// This keeps tokens on the server instead of placing them in the browser.
-// globalThis lets separately bundled Next.js route handlers share the store
-// during local development. A shared store such as Redis is still required
-// before deploying multiple application instances.
-interface AuthState {
-  sessions: Map<string, AuthSession>;
-  oidcTransactions: Map<string, OidcTransaction>;
+async function getKey(): Promise<Uint8Array> {
+  const key = Buffer.from(await getSecret("SESSION_SECRET"), "base64");
+  if (key.length !== 32) {
+    throw new Error("SESSION_SECRET must be a base64-encoded 32-byte key.");
+  }
+  return new Uint8Array(key);
 }
 
-const globalAuthState = globalThis as typeof globalThis & {
-  __hartnellMailerAuthState?: AuthState;
-};
+async function seal(
+  payload: Record<string, unknown>,
+  audience: string,
+  ttlSeconds: number
+): Promise<string> {
+  return new EncryptJWT(payload)
+    .setProtectedHeader({ alg: "dir", enc: "A256GCM" })
+    .setAudience(audience)
+    .setIssuedAt()
+    .setExpirationTime(`${ttlSeconds}s`)
+    .encrypt(await getKey());
+}
 
-const authState =
-  globalAuthState.__hartnellMailerAuthState ??
-  (globalAuthState.__hartnellMailerAuthState = {
-    sessions: new Map<string, AuthSession>(),
-    oidcTransactions: new Map<string, OidcTransaction>(),
-  });
+/** Returns the payload, or undefined if the cookie is missing, tampered with, or expired. */
+async function unseal(
+  token: string | undefined,
+  audience: string
+): Promise<Record<string, unknown> | undefined> {
+  if (!token) return undefined;
 
-function isProduction(): boolean {
-  return process.env.NODE_ENV === "production";
+  try {
+    const { payload } = await jwtDecrypt(token, await getKey(), {
+      audience,
+      keyManagementAlgorithms: ["dir"],
+      contentEncryptionAlgorithms: ["A256GCM"],
+    });
+    return payload;
+  } catch (error) {
+    // A bad cookie means "not logged in". A missing/invalid key is a server problem; surface it.
+    if (error instanceof Error && error.message.includes("SESSION_SECRET")) throw error;
+    return undefined;
+  }
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function cookieOptions(maxAge: number) {
   return {
     httpOnly: true,
-    secure: isProduction(),
+    secure: process.env.NODE_ENV === "production",
     sameSite: "lax" as const,
     path: "/",
     maxAge,
   };
 }
 
-function removeExpiredEntries() {
-  const now = Date.now();
-
-  for (const [id, session] of authState.sessions) {
-    if (session.expiresAt <= now) {
-      authState.sessions.delete(id);
-    }
-  }
-
-  for (const [state, transaction] of authState.oidcTransactions) {
-    if (
-      transaction.createdAt + OIDC_TRANSACTION_TTL_SECONDS * 1000 <=
-      now
-    ) {
-      authState.oidcTransactions.delete(state);
-    }
-  }
-}
-
-export function createOidcTransaction(codeVerifier: string, nonce: string): string {
-  removeExpiredEntries();
-
-  const state = randomUUID();
-  authState.oidcTransactions.set(state, {
-    state,
-    codeVerifier,
-    nonce,
-    createdAt: Date.now(),
-  });
-
-  return state;
-}
-
-export function consumeOidcTransaction(
-  state: string
-): OidcTransaction | undefined {
-  removeExpiredEntries();
-
-  const transaction = authState.oidcTransactions.get(state);
-  authState.oidcTransactions.delete(state);
-
-  return transaction;
-}
-
-export function createSession(input: {
-  subject: string;
-  email?: string;
-  name?: string;
-  accessToken: string;
-  refreshToken?: string;
-}): AuthSession {
-  removeExpiredEntries();
-
-  const now = Date.now();
-  const session: AuthSession = {
-    id: randomUUID(),
-    ...input,
-    createdAt: now,
-    expiresAt: now + SESSION_TTL_SECONDS * 1000,
-  };
-
-  authState.sessions.set(session.id, session);
-  return session;
-}
-
-export function getSession(request: NextRequest): AuthSession | undefined {
-  removeExpiredEntries();
-
-  const sessionId = request.cookies.get(SESSION_COOKIE)?.value;
-  if (!sessionId) {
-    return undefined;
-  }
-
-  return authState.sessions.get(sessionId);
-}
-
-export function deleteSession(request: NextRequest): void {
-  const sessionId = request.cookies.get(SESSION_COOKIE)?.value;
-  if (sessionId) {
-    authState.sessions.delete(sessionId);
-  }
-}
-
-export function setSessionCookie(response: NextResponse, sessionId: string): void {
-  response.cookies.set(SESSION_COOKIE, sessionId, cookieOptions(SESSION_TTL_SECONDS));
-}
-
-export function clearSessionCookie(response: NextResponse): void {
-  response.cookies.set(SESSION_COOKIE, "", cookieOptions(0));
-}
-
-export function setOidcTransactionCookie(
+export async function setOidcTransactionCookie(
   response: NextResponse,
-  state: string
-): void {
+  transaction: OidcTransaction
+): Promise<void> {
   response.cookies.set(
     OIDC_TRANSACTION_COOKIE,
-    state,
+    await seal({ ...transaction }, TRANSACTION_AUDIENCE, OIDC_TRANSACTION_TTL_SECONDS),
     cookieOptions(OIDC_TRANSACTION_TTL_SECONDS)
   );
 }
 
+export async function readOidcTransaction(
+  request: NextRequest
+): Promise<OidcTransaction | undefined> {
+  const payload = await unseal(
+    request.cookies.get(OIDC_TRANSACTION_COOKIE)?.value,
+    TRANSACTION_AUDIENCE
+  );
+  const state = asString(payload?.state);
+  const codeVerifier = asString(payload?.codeVerifier);
+  const nonce = asString(payload?.nonce);
+
+  return state && codeVerifier && nonce ? { state, codeVerifier, nonce } : undefined;
+}
+
 export function clearOidcTransactionCookie(response: NextResponse): void {
   response.cookies.set(OIDC_TRANSACTION_COOKIE, "", cookieOptions(0));
+}
+
+export async function setSessionCookie(
+  response: NextResponse,
+  session: AuthSession
+): Promise<void> {
+  response.cookies.set(
+    SESSION_COOKIE,
+    await seal({ ...session }, SESSION_AUDIENCE, SESSION_TTL_SECONDS),
+    cookieOptions(SESSION_TTL_SECONDS)
+  );
+}
+
+export async function getSession(request: NextRequest): Promise<AuthSession | undefined> {
+  const payload = await unseal(request.cookies.get(SESSION_COOKIE)?.value, SESSION_AUDIENCE);
+  const subject = asString(payload?.subject);
+  if (!subject) return undefined;
+
+  return { subject, email: asString(payload?.email), name: asString(payload?.name) };
+}
+
+export function clearSessionCookie(response: NextResponse): void {
+  response.cookies.set(SESSION_COOKIE, "", cookieOptions(0));
 }

@@ -1,14 +1,9 @@
-import { NextRequest, NextResponse } from "next/server";
-import {
-  clearSessionCookie,
-  deleteSession,
-} from "@/lib/auth/session";
+import { NextResponse } from "next/server";
+import { clearSessionCookie } from "@/lib/auth/session";
 
 export const runtime = "nodejs";
 
-export async function POST(request: NextRequest) {
-  deleteSession(request);
-
+export async function POST() {
   const response = NextResponse.json(
     { loggedOut: true },
     { headers: { "Cache-Control": "no-store" } }

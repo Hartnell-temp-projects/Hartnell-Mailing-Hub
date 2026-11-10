@@ -6,13 +6,36 @@ import {
   SendEmailCommand,
   UpdateTemplateCommand,
 } from "@aws-sdk/client-ses";
+import { AssumeRoleCommand, STSClient } from "@aws-sdk/client-sts";
 import { getSession } from "@/lib/auth/session";
 import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import type { RecipientRecord } from "@/components/types";
 
-const ses = new SESClient({ region: process.env.AWS_REGION ?? "us-west-2" });
+const AWS_REGION = process.env.AWS_REGION ?? "us-west-2";
+const sts = new STSClient({ region: AWS_REGION });
 const SES_RECIPIENT_LIMIT = 50;
 const TEMPLATE_NAME = process.env.SES_TEMPLATE_NAME?.trim() || "HartnellMailerPersonalized";
+
+// SES lives in another account; assume SES_ROLE_ARN there (same pattern as Redshift in /api/db).
+async function getSesClient(stsClient: STSClient): Promise<SESClient> {
+  const { Credentials: c } = await stsClient.send(new AssumeRoleCommand({
+    RoleArn: process.env.SES_ROLE_ARN,
+    RoleSessionName: "hartnell-mailing-hub-ses",
+  }));
+
+  if (!c || !c.AccessKeyId || !c.SecretAccessKey || !c.SessionToken) {
+    throw new Error("Credentials not found for SES connection.");
+  }
+
+  return new SESClient({
+    region: AWS_REGION,
+    credentials: {
+      accessKeyId: c.AccessKeyId,
+      secretAccessKey: c.SecretAccessKey,
+      sessionToken: c.SessionToken,
+    },
+  });
+}
 
 function asAddresses(value: unknown): string[] {
   if (Array.isArray(value)) {
@@ -55,7 +78,7 @@ function htmlToText(html: string): string {
     .trim();
 }
 
-async function ensureSesTemplate(subject: string, content: string) {
+async function ensureSesTemplate(ses: SESClient, subject: string, content: string) {
   const template = {
     TemplateName: TEMPLATE_NAME,
     SubjectPart: subject,
@@ -106,7 +129,7 @@ function validatePersonalizedFields(subject: string, content: string, recipients
   return null;
 }
 
-async function sendPersonalizedEmail({
+async function sendPersonalizedEmail(ses: SESClient, {
   subject,
   content,
   to,
@@ -125,7 +148,7 @@ async function sendPersonalizedEmail({
   failedRecipients: string[];
   failureReasons: Record<string, string>;
 }> {
-  await ensureSesTemplate(subject, content);
+  await ensureSesTemplate(ses, subject, content);
   const sentRecipients: string[] = [];
   const failedRecipients: string[] = [];
   const failureReasons: Record<string, string> = {};
@@ -170,7 +193,7 @@ async function sendPersonalizedEmail({
 }
 
 export async function POST(req: NextRequest) {
-  if (!getSession(req)) {
+  if (!(await getSession(req))) {
     return NextResponse.json(
       { error: "Authentication is required before sending email." },
       { status: 401 }
@@ -212,6 +235,14 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  let ses: SESClient;
+  try {
+    ses = await getSesClient(sts);
+  } catch (error) {
+    console.error("Could not assume the SES role:", error);
+    return NextResponse.json({ error: "Email service is unavailable. Please try again." }, { status: 502 });
+  }
+
   if (personalizedRecipients.length > 0) {
     if (personalizedDestination !== "to" && personalizedDestination !== "bcc") {
       return NextResponse.json(
@@ -225,7 +256,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: invalidFields }, { status: 400 });
     }
 
-    const result = await sendPersonalizedEmail({
+    const result = await sendPersonalizedEmail(ses, {
       subject,
       content: cleanContent,
       to: toAddresses,

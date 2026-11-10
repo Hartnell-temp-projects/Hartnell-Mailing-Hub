@@ -31,7 +31,7 @@ async function loadBuiltInTemplates(): Promise<EmailTemplate[]> {
  * UI can still show whatever loaded.
  */
 export async function GET(request: NextRequest) {
-  const user = requireStorageUser(request);
+  const user = await requireStorageUser(request);
   if (user instanceof NextResponse) return user;
 
   const [builtIn, saved] = await Promise.allSettled([
@@ -59,7 +59,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const user = requireStorageUser(request);
+  const user = await requireStorageUser(request);
   if (user instanceof NextResponse) return user;
 
   try {

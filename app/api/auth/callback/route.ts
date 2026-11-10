@@ -2,9 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import * as oidc from "openid-client";
 import {
   clearOidcTransactionCookie,
-  consumeOidcTransaction,
-  createSession,
-  OIDC_TRANSACTION_COOKIE,
+  readOidcTransaction,
   setSessionCookie,
 } from "@/lib/auth/session";
 import { getDuoConfiguration, getDuoRedirectUri } from "@/lib/auth/config";
@@ -15,60 +13,65 @@ function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-function failedLoginResponse(request: NextRequest) {
-  const response = NextResponse.redirect(
-    new URL("/?authError=login_failed", request.url)
-  );
+// Behind Amplify, request.url reflects the internal server address (https://localhost:3000),
+// not the public hostname. Derive everything public-facing from the configured redirect URI.
+function publicUrl(path: string): URL {
+  return new URL(path, getDuoRedirectUri());
+}
+
+function failedLoginResponse() {
+  // Not a secret; logging the origin confirms which DUO_REDIRECT_URI the runtime actually sees.
+  console.error(`Duo login failed; redirecting to ${publicUrl("/").origin}`);
+  const response = NextResponse.redirect(publicUrl("/?authError=login_failed"));
   clearOidcTransactionCookie(response);
   return response;
 }
 
 export async function GET(request: NextRequest) {
-  const returnedState = new URL(request.url).searchParams.get("state");
-  const cookieState = request.cookies.get(OIDC_TRANSACTION_COOKIE)?.value;
+  // Public callback URL (what Duo redirected to) + the query params Duo sent.
+  const callbackUrl = publicUrl(getDuoRedirectUri());
+  callbackUrl.search = request.nextUrl.search;
 
-  if (!returnedState || !cookieState || returnedState !== cookieState) {
-    return failedLoginResponse(request);
-  }
-
-  const transaction = consumeOidcTransaction(returnedState);
-  if (!transaction) {
-    return failedLoginResponse(request);
-  }
+  const returnedState = callbackUrl.searchParams.get("state");
 
   try {
+    const transaction = await readOidcTransaction(request);
+    if (!transaction) {
+      console.error("Duo callback failed: OIDC transaction cookie missing, expired, or undecryptable.");
+      return failedLoginResponse();
+    }
+    if (!returnedState || returnedState !== transaction.state) {
+      console.error("Duo callback failed: state in callback URL does not match transaction cookie.");
+      return failedLoginResponse();
+    }
+
     const configuration = await getDuoConfiguration();
     const tokens = await oidc.authorizationCodeGrant(
       configuration,
-      new URL(request.url),
+      callbackUrl,
       {
         pkceCodeVerifier: transaction.codeVerifier,
         expectedState: transaction.state,
         expectedNonce: transaction.nonce,
-      },
-      { redirect_uri: getDuoRedirectUri() }
+      }
     );
 
     const claims = tokens.claims();
     const subject = readString(claims?.sub);
-    if (!subject || !tokens.access_token) {
+    if (!subject) {
       throw new Error("Duo did not return the required identity information.");
     }
 
-    const session = createSession({
+    const response = NextResponse.redirect(publicUrl("/"));
+    clearOidcTransactionCookie(response);
+    await setSessionCookie(response, {
       subject,
       email: readString(claims?.email),
       name: readString(claims?.name),
-      accessToken: tokens.access_token,
-      refreshToken: tokens.refresh_token,
     });
-
-    const response = NextResponse.redirect(new URL("/", request.url));
-    clearOidcTransactionCookie(response);
-    setSessionCookie(response, session.id);
     return response;
   } catch (error) {
     console.error("Duo callback failed:", error);
-    return failedLoginResponse(request);
+    return failedLoginResponse();
   }
 }

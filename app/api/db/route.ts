@@ -1,6 +1,7 @@
 import path from 'path';
 import { readFile } from 'fs/promises';
 import { requireStorageUser } from "@/lib/storage/http";
+import { getSecret } from "@/lib/secrets";
 import { DescribeStatementCommand, ExecuteStatementCommand, Field, GetStatementResultCommand, RedshiftDataClient } from "@aws-sdk/client-redshift-data";
 import { AssumeRoleCommand, STSClient } from "@aws-sdk/client-sts";
 import { NextRequest, NextResponse } from "next/server";
@@ -36,11 +37,19 @@ async function getRedshiftClient(stsClient: STSClient): Promise<RedshiftDataClie
     });
 }
 
+// Queries are kept out of the repo.
+// Deployed: Secrets Manager secret `${SECRETS_MANAGER_PREFIX}/SQL_<TYPE>` (e.g. SQL_STUDENT), plain text.
+// Local dev (no prefix): the gitignored lib/sql/<type>.sql file.
+// queryType is already allowlisted by the caller, so it is safe to use in names/paths.
+async function loadQuery(queryType: string): Promise<string> {
+    if (process.env.SECRETS_MANAGER_PREFIX?.trim()) {
+        return getSecret(`SQL_${queryType.toUpperCase()}`);
+    }
+    return readFile(path.join(process.cwd(), "lib", "sql", `${queryType}.sql`), "utf8");
+}
+
 async function executeQuery(redshiftClient: RedshiftDataClient, queryType: string) {
-    const content = await readFile(
-        path.join(process.cwd(), "lib", "sql", `${queryType}.sql`),
-        "utf8"
-    );
+    const content = await loadQuery(queryType);
     
     const rows = [];
     const columns: string[] = [];
@@ -102,7 +111,7 @@ async function executeQuery(redshiftClient: RedshiftDataClient, queryType: strin
 const RECIPIENT_TYPES = ["faculty", "student", "staff"];
 
 export async function GET(request: NextRequest) {
-    const user = requireStorageUser(request);
+    const user = await requireStorageUser(request);
     if (user instanceof NextResponse) return user;
 
     // GET requests carry no body, so the type comes from ?recipientType=
