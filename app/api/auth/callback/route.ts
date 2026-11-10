@@ -20,6 +20,8 @@ function publicUrl(path: string): URL {
 }
 
 function failedLoginResponse() {
+  // Not a secret; logging the origin confirms which DUO_REDIRECT_URI the runtime actually sees.
+  console.error(`Duo login failed; redirecting to ${publicUrl("/").origin}`);
   const response = NextResponse.redirect(publicUrl("/?authError=login_failed"));
   clearOidcTransactionCookie(response);
   return response;
@@ -34,7 +36,12 @@ export async function GET(request: NextRequest) {
 
   try {
     const transaction = await readOidcTransaction(request);
-    if (!transaction || !returnedState || returnedState !== transaction.state) {
+    if (!transaction) {
+      console.error("Duo callback failed: OIDC transaction cookie missing, expired, or undecryptable.");
+      return failedLoginResponse();
+    }
+    if (!returnedState || returnedState !== transaction.state) {
+      console.error("Duo callback failed: state in callback URL does not match transaction cookie.");
       return failedLoginResponse();
     }
 
