@@ -15,38 +15,45 @@ function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-function failedLoginResponse(request: NextRequest) {
-  const response = NextResponse.redirect(
-    new URL("/?authError=login_failed", request.url)
-  );
+// Behind Amplify, request.url reflects the internal server address (https://localhost:3000),
+// not the public hostname. Derive everything public-facing from the configured redirect URI.
+function publicUrl(path: string): URL {
+  return new URL(path, getDuoRedirectUri());
+}
+
+function failedLoginResponse() {
+  const response = NextResponse.redirect(publicUrl("/?authError=login_failed"));
   clearOidcTransactionCookie(response);
   return response;
 }
 
 export async function GET(request: NextRequest) {
-  const returnedState = new URL(request.url).searchParams.get("state");
+  // Public callback URL (what Duo redirected to) + the query params Duo sent.
+  const callbackUrl = publicUrl(getDuoRedirectUri());
+  callbackUrl.search = request.nextUrl.search;
+
+  const returnedState = callbackUrl.searchParams.get("state");
   const cookieState = request.cookies.get(OIDC_TRANSACTION_COOKIE)?.value;
 
   if (!returnedState || !cookieState || returnedState !== cookieState) {
-    return failedLoginResponse(request);
+    return failedLoginResponse();
   }
 
   const transaction = consumeOidcTransaction(returnedState);
   if (!transaction) {
-    return failedLoginResponse(request);
+    return failedLoginResponse();
   }
 
   try {
     const configuration = await getDuoConfiguration();
     const tokens = await oidc.authorizationCodeGrant(
       configuration,
-      new URL(request.url),
+      callbackUrl,
       {
         pkceCodeVerifier: transaction.codeVerifier,
         expectedState: transaction.state,
         expectedNonce: transaction.nonce,
-      },
-      { redirect_uri: getDuoRedirectUri() }
+      }
     );
 
     const claims = tokens.claims();
@@ -63,12 +70,12 @@ export async function GET(request: NextRequest) {
       refreshToken: tokens.refresh_token,
     });
 
-    const response = NextResponse.redirect(new URL("/", request.url));
+    const response = NextResponse.redirect(publicUrl("/"));
     clearOidcTransactionCookie(response);
     setSessionCookie(response, session.id);
     return response;
   } catch (error) {
     console.error("Duo callback failed:", error);
-    return failedLoginResponse(request);
+    return failedLoginResponse();
   }
 }
