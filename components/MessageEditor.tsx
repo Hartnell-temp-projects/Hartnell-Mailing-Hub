@@ -6,7 +6,7 @@ import TextAlign from "@tiptap/extension-text-align";
 import { TextStyle } from "@tiptap/extension-text-style";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import { EditorMode } from "./types";
 
@@ -14,6 +14,7 @@ interface Props {
   value: string;
   mode: EditorMode;
   onChange: (value: string) => void;
+  isTemplate?: boolean;
 }
 
 const FULL_DOCUMENT_PATTERN = /<!doctype\s+html|<html[\s>]/i;
@@ -203,7 +204,10 @@ function ToolbarButton({
   );
 }
 
-export default function MessageEditor({ value, mode, onChange }: Props) {
+export default function MessageEditor({ value, mode, onChange, isTemplate = false }: Props) {
+  const templateFrameRef = useRef<HTMLIFrameElement>(null);
+  const [visualTemplateHtml, setVisualTemplateHtml] = useState<string | null>(null);
+  const [fullDocumentView, setFullDocumentView] = useState<"html" | "visual">("html");
   const [fontSizeMenuOpen, setFontSizeMenuOpen] = useState(false);
   const [blockStyleMenuOpen, setBlockStyleMenuOpen] = useState(false);
   const [alignmentMenuOpen, setAlignmentMenuOpen] = useState(false);
@@ -223,8 +227,11 @@ export default function MessageEditor({ value, mode, onChange }: Props) {
   });
 
   const isFullDocument = FULL_DOCUMENT_PATTERN.test(value.trim());
-  const showHtmlSource = mode === "html" || isFullDocument;
-  const initialContent = useMemo(() => getEditableContent(value), [value]);
+  const showHtmlSource = isTemplate ? fullDocumentView === "html" : mode === "html";
+  const initialContent = useMemo(
+    () => (isFullDocument ? "<p></p>" : getEditableContent(value)),
+    [isFullDocument, value]
+  );
   const editor = useEditor({
     extensions: EDITOR_EXTENSIONS,
     content: initialContent,
@@ -236,7 +243,7 @@ export default function MessageEditor({ value, mode, onChange }: Props) {
   });
 
   useEffect(() => {
-    if (!editor || showHtmlSource) {
+    if (!editor || showHtmlSource || isFullDocument) {
       return;
     }
 
@@ -244,7 +251,7 @@ export default function MessageEditor({ value, mode, onChange }: Props) {
     if (editor.getHTML() !== nextContent) {
       editor.commands.setContent(nextContent, { emitUpdate: false });
     }
-  }, [editor, showHtmlSource, value]);
+  }, [editor, isFullDocument, showHtmlSource, value]);
 
   useEffect(() => {
     if (!editor) {
@@ -330,6 +337,44 @@ export default function MessageEditor({ value, mode, onChange }: Props) {
     setRecipientVariableMenuOpen(false);
   };
 
+  const handleTemplateFrameLoad = () => {
+    const templateDocument = templateFrameRef.current?.contentDocument;
+    if (!templateDocument?.body) {
+      return;
+    }
+
+    const commitTemplateChanges = () => {
+      const updatedDocument = `<!doctype html>\n${templateDocument.documentElement.outerHTML}`;
+      onChange(sanitizeEmailHtml(updatedDocument));
+    };
+
+    const candidates = Array.from(
+      templateDocument.body.querySelectorAll<HTMLElement>(
+        "p, h1, h2, h3, h4, h5, h6, li, a, td, th, span, div"
+      )
+    ).filter((element) => {
+      if (!element.textContent?.trim()) return false;
+      return !element.querySelector("table, ul, ol, p, h1, h2, h3, h4, h5, h6, li");
+    });
+
+    const editableElements = candidates.filter(
+      (element) => !candidates.some((ancestor) => ancestor !== element && ancestor.contains(element))
+    );
+
+    editableElements.forEach((element) => {
+      element.contentEditable = "true";
+      element.spellcheck = true;
+      element.style.cursor = "text";
+      element.addEventListener("input", commitTemplateChanges);
+    });
+
+    templateDocument.addEventListener("click", (event) => {
+      if ((event.target as HTMLElement).closest("a")) {
+        event.preventDefault();
+      }
+    });
+  };
+
   return (
     <div>
       <div className="mb-1.5 flex flex-wrap items-start justify-between gap-3">
@@ -338,10 +383,47 @@ export default function MessageEditor({ value, mode, onChange }: Props) {
             Message Body <span className="text-red-500">*</span>
           </label>
           <p className="mt-1 text-xs text-slate-400">
-            {isFullDocument ? "This full HTML template is preserved as source so its email layout is not damaged." : "Use the formatting tools to edit your message."}
+            {isTemplate
+              ? showHtmlSource
+                ? "Edit the HTML source or switch views to review the rendered email."
+                : "Click in the rendered email to edit text. Switch to Show HTML for layout or styling changes."
+              : "Use the formatting tools to edit your message."}
           </p>
         </div>
       </div>
+
+      {isTemplate && (
+        <div className="mb-2 flex w-fit rounded-lg border border-slate-200 bg-slate-50 p-1" role="tablist" aria-label="Template view">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={showHtmlSource}
+            onClick={() => {
+              setFullDocumentView("html");
+              setVisualTemplateHtml(null);
+            }}
+            className={`rounded-md px-3 py-1.5 text-sm font-semibold transition-colors ${
+              showHtmlSource ? "bg-white text-[#8c1d40] shadow-sm" : "text-slate-500 hover:text-[#8c1d40]"
+            }`}
+          >
+            Show HTML
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={!showHtmlSource}
+            onClick={() => {
+              setVisualTemplateHtml(sanitizeEmailHtml(value));
+              setFullDocumentView("visual");
+            }}
+            className={`rounded-md px-3 py-1.5 text-sm font-semibold transition-colors ${
+              !showHtmlSource ? "bg-white text-[#8c1d40] shadow-sm" : "text-slate-500 hover:text-[#8c1d40]"
+            }`}
+          >
+            Show Normal Text
+          </button>
+        </div>
+      )}
 
       {showHtmlSource ? (
         <textarea
@@ -354,6 +436,15 @@ export default function MessageEditor({ value, mode, onChange }: Props) {
           aria-label="HTML message body"
           aria-required="true"
           className="w-full resize-y rounded-lg border border-slate-200 px-3.5 py-2.5 font-mono text-xs leading-relaxed text-slate-800 placeholder:text-slate-400 shadow-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+      ) : isFullDocument ? (
+        <iframe
+          title="Rendered HTML template"
+          srcDoc={visualTemplateHtml ?? sanitizeEmailHtml(value)}
+          ref={templateFrameRef}
+          onLoad={handleTemplateFrameLoad}
+          sandbox="allow-same-origin allow-popups"
+          className="block h-[520px] w-full rounded-lg border border-slate-200 bg-white shadow-sm"
         />
       ) : (
         <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm focus-within:border-transparent focus-within:ring-2 focus-within:ring-blue-500">
