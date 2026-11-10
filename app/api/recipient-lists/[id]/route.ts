@@ -8,7 +8,7 @@ export async function DELETE(
   request: NextRequest,
   ctx: RouteContext<"/api/recipient-lists/[id]">
 ) {
-  const user = requireStorageUser(request);
+  const user = await requireStorageUser(request);
   if (user instanceof NextResponse) return user;
 
   const { id } = await ctx.params;

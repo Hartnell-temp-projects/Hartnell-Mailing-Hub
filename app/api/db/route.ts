@@ -102,7 +102,7 @@ async function executeQuery(redshiftClient: RedshiftDataClient, queryType: strin
 const RECIPIENT_TYPES = ["faculty", "student", "staff"];
 
 export async function GET(request: NextRequest) {
-    const user = requireStorageUser(request);
+    const user = await requireStorageUser(request);
     if (user instanceof NextResponse) return user;
 
     // GET requests carry no body, so the type comes from ?recipientType=

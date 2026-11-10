@@ -1,9 +1,6 @@
 import { NextResponse } from "next/server";
 import * as oidc from "openid-client";
-import {
-  createOidcTransaction,
-  setOidcTransactionCookie,
-} from "@/lib/auth/session";
+import { setOidcTransactionCookie } from "@/lib/auth/session";
 import { getDuoConfiguration, getDuoRedirectUri, getDuoScope } from "@/lib/auth/config";
 
 export const runtime = "nodejs";
@@ -14,7 +11,7 @@ export async function GET() {
     const codeVerifier = oidc.randomPKCECodeVerifier();
     const codeChallenge = await oidc.calculatePKCECodeChallenge(codeVerifier);
     const nonce = oidc.randomNonce();
-    const state = createOidcTransaction(codeVerifier, nonce);
+    const state = oidc.randomState();
 
     const authorizationUrl = oidc.buildAuthorizationUrl(configuration, {
       redirect_uri: getDuoRedirectUri(),
@@ -27,7 +24,7 @@ export async function GET() {
     });
 
     const response = NextResponse.redirect(authorizationUrl);
-    setOidcTransactionCookie(response, state);
+    await setOidcTransactionCookie(response, { state, codeVerifier, nonce });
     return response;
   } catch (error) {
     console.error("Duo login could not be started:", error);

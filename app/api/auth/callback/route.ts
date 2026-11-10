@@ -2,9 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import * as oidc from "openid-client";
 import {
   clearOidcTransactionCookie,
-  consumeOidcTransaction,
-  createSession,
-  OIDC_TRANSACTION_COOKIE,
+  readOidcTransaction,
   setSessionCookie,
 } from "@/lib/auth/session";
 import { getDuoConfiguration, getDuoRedirectUri } from "@/lib/auth/config";
@@ -33,18 +31,13 @@ export async function GET(request: NextRequest) {
   callbackUrl.search = request.nextUrl.search;
 
   const returnedState = callbackUrl.searchParams.get("state");
-  const cookieState = request.cookies.get(OIDC_TRANSACTION_COOKIE)?.value;
-
-  if (!returnedState || !cookieState || returnedState !== cookieState) {
-    return failedLoginResponse();
-  }
-
-  const transaction = consumeOidcTransaction(returnedState);
-  if (!transaction) {
-    return failedLoginResponse();
-  }
 
   try {
+    const transaction = await readOidcTransaction(request);
+    if (!transaction || !returnedState || returnedState !== transaction.state) {
+      return failedLoginResponse();
+    }
+
     const configuration = await getDuoConfiguration();
     const tokens = await oidc.authorizationCodeGrant(
       configuration,
@@ -58,21 +51,17 @@ export async function GET(request: NextRequest) {
 
     const claims = tokens.claims();
     const subject = readString(claims?.sub);
-    if (!subject || !tokens.access_token) {
+    if (!subject) {
       throw new Error("Duo did not return the required identity information.");
     }
 
-    const session = createSession({
+    const response = NextResponse.redirect(publicUrl("/"));
+    clearOidcTransactionCookie(response);
+    await setSessionCookie(response, {
       subject,
       email: readString(claims?.email),
       name: readString(claims?.name),
-      accessToken: tokens.access_token,
-      refreshToken: tokens.refresh_token,
     });
-
-    const response = NextResponse.redirect(publicUrl("/"));
-    clearOidcTransactionCookie(response);
-    setSessionCookie(response, session.id);
     return response;
   } catch (error) {
     console.error("Duo callback failed:", error);

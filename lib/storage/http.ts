@@ -15,8 +15,10 @@ export function json(body: unknown, status = 200) {
 }
 
 /** Returns the signed-in user, or a 401 response. The Box folder is always derived from this. */
-export function requireStorageUser(request: NextRequest): StorageUser | NextResponse {
-  const session = getSession(request);
+export async function requireStorageUser(
+  request: NextRequest
+): Promise<StorageUser | NextResponse> {
+  const session = await getSession(request);
   if (!session) {
     return json({ error: "Please log in to access saved data." }, 401);
   }

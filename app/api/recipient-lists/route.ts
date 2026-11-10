@@ -5,7 +5,7 @@ import { createRecipientList, listRecipientLists } from "@/lib/storage/userData"
 export const runtime = "nodejs";
 
 export async function GET(request: NextRequest) {
-  const user = requireStorageUser(request);
+  const user = await requireStorageUser(request);
   if (user instanceof NextResponse) return user;
 
   try {
@@ -16,7 +16,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const user = requireStorageUser(request);
+  const user = await requireStorageUser(request);
   if (user instanceof NextResponse) return user;
 
   try {

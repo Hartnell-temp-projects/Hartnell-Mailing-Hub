@@ -169,7 +169,7 @@ async function sendPersonalizedEmail({
 }
 
 export async function POST(req: NextRequest) {
-  if (!getSession(req)) {
+  if (!(await getSession(req))) {
     return NextResponse.json(
       { error: "Authentication is required before sending email." },
       { status: 401 }
