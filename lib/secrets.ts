@@ -1,28 +1,29 @@
-import { GetParameterCommand, SSMClient } from "@aws-sdk/client-ssm";
+import { GetSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
 
-// Server-only secret lookup backed by SSM Parameter Store (SecureString).
+// Server-only secret lookup backed by AWS Secrets Manager.
 //
-// Set SSM_PARAMETER_PREFIX (e.g. "/hartnell-mailer/prod") to read secrets from SSM.
-// Parameter names are `${prefix}/${NAME}`, e.g. /hartnell-mailer/prod/DUO_CLIENT_SECRET.
+// Set SECRETS_MANAGER_PREFIX (e.g. "hartnell-mailer/prod") to read secrets from Secrets Manager.
+// Secret names are `${prefix}/${NAME}`, e.g. hartnell-mailer/prod/DUO_CLIENT_SECRET.
+// Each secret holds the plain string value (not key/value JSON).
 // When the prefix is unset (local dev), it falls back to process.env[NAME].
 //
-// Values are cached in memory so SSM is hit once per secret per process.
+// Values are cached in memory so Secrets Manager is hit once per secret per process.
 
 const globalSecretState = globalThis as typeof globalThis & {
   __hartnellMailerSecrets?: Map<string, Promise<string>>;
-  __hartnellMailerSsm?: SSMClient;
+  __hartnellMailerSecretsClient?: SecretsManagerClient;
 };
 
 const cache = (globalSecretState.__hartnellMailerSecrets ??= new Map());
 
-function ssmClient(): SSMClient {
-  return (globalSecretState.__hartnellMailerSsm ??= new SSMClient({
+function secretsClient(): SecretsManagerClient {
+  return (globalSecretState.__hartnellMailerSecretsClient ??= new SecretsManagerClient({
     region: process.env.AWS_REGION ?? "us-west-2",
   }));
 }
 
 async function fetchSecret(name: string): Promise<string> {
-  const prefix = process.env.SSM_PARAMETER_PREFIX?.trim().replace(/\/+$/, "");
+  const prefix = process.env.SECRETS_MANAGER_PREFIX?.trim().replace(/\/+$/, "");
 
   if (!prefix) {
     const value = process.env[name]?.trim();
@@ -30,11 +31,10 @@ async function fetchSecret(name: string): Promise<string> {
     return value;
   }
 
-  const response = await ssmClient().send(
-    new GetParameterCommand({ Name: `${prefix}/${name}`, WithDecryption: true })
-  );
-  const value = response.Parameter?.Value?.trim();
-  if (!value) throw new Error(`SSM parameter ${prefix}/${name} is empty or missing.`);
+  const secretId = `${prefix}/${name}`;
+  const response = await secretsClient().send(new GetSecretValueCommand({ SecretId: secretId }));
+  const value = response.SecretString?.trim();
+  if (!value) throw new Error(`Secret ${secretId} is empty or not a string secret.`);
   return value;
 }
 
