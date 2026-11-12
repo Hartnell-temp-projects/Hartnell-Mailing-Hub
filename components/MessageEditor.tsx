@@ -115,8 +115,41 @@ function escapeHtml(value: string) {
 function getEditableContent(value: string) {
   const trimmedValue = value.trim();
   if (!trimmedValue) return "<p></p>";
+  if (FULL_DOCUMENT_PATTERN.test(trimmedValue)) {
+    if (typeof DOMParser !== "undefined") {
+      const document = new DOMParser().parseFromString(value, "text/html");
+      const editableRegion = findEditableRegion(document);
+      if (editableRegion) return editableRegion.innerHTML || "<p></p>";
+    }
+
+    const bodyMatch = value.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+    if (bodyMatch?.[1]) return bodyMatch[1];
+  }
   if (/<[a-z][\s\S]*>/i.test(trimmedValue)) return value;
   return `<p>${escapeHtml(value).replace(/\r?\n/g, "<br />")}</p>`;
+}
+
+function findEditableRegion(document: Document): HTMLElement | null {
+  const markedRegion = document.querySelector<HTMLElement>("[data-editable-region='body']");
+  if (markedRegion) return markedRegion;
+
+  const candidates = Array.from(document.querySelectorAll<HTMLElement>("main, article, section, td, div"))
+    .filter((element) => element.querySelector("p, ul, ol, li") && !element.querySelector("table"));
+
+  return candidates.sort((first, second) => (second.textContent?.length || 0) - (first.textContent?.length || 0))[0] || null;
+}
+
+function mergeEditableContent(source: string, content: string): string {
+  if (!FULL_DOCUMENT_PATTERN.test(source.trim()) || typeof DOMParser === "undefined") {
+    return content;
+  }
+
+  const document = new DOMParser().parseFromString(source, "text/html");
+  const editableRegion = findEditableRegion(document);
+  if (!editableRegion) return content;
+
+  editableRegion.innerHTML = content;
+  return `<!doctype html>\n${document.documentElement.outerHTML}`;
 }
 
 function getBlockStyle(editor: Editor) {
@@ -206,8 +239,10 @@ function ToolbarButton({
 
 export default function MessageEditor({ value, mode, onChange, isTemplate = false }: Props) {
   const templateFrameRef = useRef<HTMLIFrameElement>(null);
+  const templateRangeRef = useRef<Range | null>(null);
+  const templateSourceRef = useRef<string | null>(null);
   const [visualTemplateHtml, setVisualTemplateHtml] = useState<string | null>(null);
-  const [fullDocumentView, setFullDocumentView] = useState<"html" | "visual">("html");
+  const [fullDocumentView, setFullDocumentView] = useState<"html" | "visual">("visual");
   const [fontSizeMenuOpen, setFontSizeMenuOpen] = useState(false);
   const [blockStyleMenuOpen, setBlockStyleMenuOpen] = useState(false);
   const [alignmentMenuOpen, setAlignmentMenuOpen] = useState(false);
@@ -228,19 +263,31 @@ export default function MessageEditor({ value, mode, onChange, isTemplate = fals
 
   const isFullDocument = FULL_DOCUMENT_PATTERN.test(value.trim());
   const showHtmlSource = isTemplate ? fullDocumentView === "html" : mode === "html";
-  const initialContent = useMemo(
-    () => (isFullDocument ? "<p></p>" : getEditableContent(value)),
-    [isFullDocument, value]
-  );
+  const initialContent = useMemo(() => getEditableContent(value), [value]);
   const editor = useEditor({
     extensions: EDITOR_EXTENSIONS,
     content: initialContent,
     immediatelyRender: false,
     onUpdate: ({ editor: updatedEditor }) => {
-      onChange(sanitizeEmailHtml(updatedEditor.getHTML()));
+      const cleanContent = sanitizeEmailHtml(updatedEditor.getHTML());
+      const nextValue = isTemplate
+        ? mergeEditableContent(templateSourceRef.current || value, cleanContent)
+        : cleanContent;
+      onChange(nextValue);
       setActiveFormats(getActiveFormats(updatedEditor));
     },
   });
+
+  useEffect(() => {
+    if (!isTemplate) {
+      templateSourceRef.current = null;
+      return;
+    }
+
+    if (FULL_DOCUMENT_PATTERN.test(value.trim())) {
+      templateSourceRef.current = value;
+    }
+  }, [isTemplate, value]);
 
   useEffect(() => {
     if (!editor || showHtmlSource || isFullDocument) {
@@ -337,21 +384,32 @@ export default function MessageEditor({ value, mode, onChange, isTemplate = fals
     setRecipientVariableMenuOpen(false);
   };
 
+  const handleHtmlChange = (nextValue: string) => {
+    if (isTemplate && FULL_DOCUMENT_PATTERN.test(nextValue.trim())) {
+      templateSourceRef.current = nextValue;
+    }
+    onChange(nextValue);
+  };
+
   const handleTemplateFrameLoad = () => {
     const templateDocument = templateFrameRef.current?.contentDocument;
-    if (!templateDocument?.body) {
-      return;
-    }
+    if (!templateDocument?.body) return;
+    if (!visualTemplateHtml) setVisualTemplateHtml(sanitizeEmailHtml(value));
 
     const commitTemplateChanges = () => {
       const updatedDocument = `<!doctype html>\n${templateDocument.documentElement.outerHTML}`;
       onChange(sanitizeEmailHtml(updatedDocument));
     };
 
+    templateDocument.addEventListener("selectionchange", () => {
+      const selection = templateDocument.getSelection();
+      if (selection && selection.rangeCount > 0 && !selection.isCollapsed) {
+        templateRangeRef.current = selection.getRangeAt(0).cloneRange();
+      }
+    });
+
     const candidates = Array.from(
-      templateDocument.body.querySelectorAll<HTMLElement>(
-        "p, h1, h2, h3, h4, h5, h6, li, a, td, th, span, div"
-      )
+      templateDocument.body.querySelectorAll<HTMLElement>("p, h1, h2, h3, h4, h5, h6, li, a, td, th, span, div")
     ).filter((element) => {
       if (!element.textContent?.trim()) return false;
       return !element.querySelector("table, ul, ol, p, h1, h2, h3, h4, h5, h6, li");
@@ -369,10 +427,73 @@ export default function MessageEditor({ value, mode, onChange, isTemplate = fals
     });
 
     templateDocument.addEventListener("click", (event) => {
-      if ((event.target as HTMLElement).closest("a")) {
-        event.preventDefault();
-      }
+      if ((event.target as HTMLElement).closest("a")) event.preventDefault();
     });
+  };
+
+  const commitVisualTemplateChanges = () => {
+    const templateDocument = templateFrameRef.current?.contentDocument;
+    if (!templateDocument) return;
+
+    const updatedDocument = `<!doctype html>\n${templateDocument.documentElement.outerHTML}`;
+    onChange(sanitizeEmailHtml(updatedDocument));
+  };
+
+  const applyVisualTemplateFormat = (format: "bold" | "italic" | "underline" | "highlight" | "fontSize", value?: string) => {
+    const templateDocument = templateFrameRef.current?.contentDocument;
+    const savedRange = templateRangeRef.current;
+    if (!templateDocument || !savedRange || savedRange.collapsed) return;
+
+    const selection = templateDocument.getSelection();
+    if (!selection) return;
+
+    const startElement = savedRange.startContainer.nodeType === Node.TEXT_NODE
+      ? savedRange.startContainer.parentElement
+      : savedRange.startContainer as HTMLElement;
+    const endElement = savedRange.endContainer.nodeType === Node.TEXT_NODE
+      ? savedRange.endContainer.parentElement
+      : savedRange.endContainer as HTMLElement;
+    const startRegion = startElement?.closest("[contenteditable='true']");
+    const endRegion = endElement?.closest("[contenteditable='true']");
+    if (!startRegion || startRegion !== endRegion) return;
+
+    const wrapper = templateDocument.createElement(
+      format === "bold" ? "strong" : format === "italic" ? "em" : format === "underline" ? "u" : "span"
+    );
+    if (format === "highlight") wrapper.style.backgroundColor = value || HIGHLIGHT_COLORS[0].value;
+    if (format === "fontSize") wrapper.style.fontSize = value || FONT_SIZE_OPTIONS[1].value;
+
+    selection.removeAllRanges();
+    selection.addRange(savedRange);
+    wrapper.appendChild(savedRange.extractContents());
+    savedRange.insertNode(wrapper);
+    savedRange.selectNodeContents(wrapper);
+    templateRangeRef.current = savedRange.cloneRange();
+    commitVisualTemplateChanges();
+  };
+
+  const addVisualTemplateLink = () => {
+    const url = window.prompt("Enter the URL for the selected text:", "https://");
+    if (!url) return;
+
+    const templateDocument = templateFrameRef.current?.contentDocument;
+    const savedRange = templateRangeRef.current;
+    if (!templateDocument || !savedRange || savedRange.collapsed) return;
+
+    const selection = templateDocument.getSelection();
+    if (!selection) return;
+    selection.removeAllRanges();
+    selection.addRange(savedRange);
+
+    const link = templateDocument.createElement("a");
+    link.href = url.trim();
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.appendChild(savedRange.extractContents());
+    savedRange.insertNode(link);
+    savedRange.selectNodeContents(link);
+    templateRangeRef.current = savedRange.cloneRange();
+    commitVisualTemplateChanges();
   };
 
   return (
@@ -385,43 +506,44 @@ export default function MessageEditor({ value, mode, onChange, isTemplate = fals
           <p className="mt-1 text-xs text-slate-400">
             {isTemplate
               ? showHtmlSource
-                ? "Edit the HTML source or switch views to review the rendered email."
-                : "Click in the rendered email to edit text. Switch to Show HTML for layout or styling changes."
+                ? "Edit the HTML source or switch back to the visual editor."
+                : "Use the formatting tools to edit your template. Switch on Show HTML to edit the source."
               : "Use the formatting tools to edit your message."}
           </p>
         </div>
       </div>
 
       {isTemplate && (
-        <div className="mb-2 flex w-fit rounded-lg border border-slate-200 bg-slate-50 p-1" role="tablist" aria-label="Template view">
+        <div className="mb-2 flex items-center gap-3" aria-label="Template editor mode">
+          <span className="text-sm font-semibold text-slate-600">Visual editor</span>
           <button
             type="button"
-            role="tab"
-            aria-selected={showHtmlSource}
+            role="switch"
+            aria-checked={showHtmlSource}
+            aria-label="Show HTML source"
+            title={showHtmlSource ? "Switch to the normal editor" : "Show HTML source"}
             onClick={() => {
-              setFullDocumentView("html");
-              setVisualTemplateHtml(null);
+              if (showHtmlSource) {
+                setVisualTemplateHtml(sanitizeEmailHtml(value));
+                setFullDocumentView("visual");
+              } else {
+                setFullDocumentView("html");
+                setVisualTemplateHtml(null);
+              }
             }}
-            className={`rounded-md px-3 py-1.5 text-sm font-semibold transition-colors ${
-              showHtmlSource ? "bg-white text-[#8c1d40] shadow-sm" : "text-slate-500 hover:text-[#8c1d40]"
+            className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+              showHtmlSource ? "bg-[#8c1d40]" : "bg-slate-300"
             }`}
           >
+            <span
+              className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+                showHtmlSource ? "translate-x-5" : "translate-x-0.5"
+              }`}
+            />
+          </button>
+          <span className={`text-sm font-semibold ${showHtmlSource ? "text-[#8c1d40]" : "text-slate-500"}`}>
             Show HTML
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={!showHtmlSource}
-            onClick={() => {
-              setVisualTemplateHtml(sanitizeEmailHtml(value));
-              setFullDocumentView("visual");
-            }}
-            className={`rounded-md px-3 py-1.5 text-sm font-semibold transition-colors ${
-              !showHtmlSource ? "bg-white text-[#8c1d40] shadow-sm" : "text-slate-500 hover:text-[#8c1d40]"
-            }`}
-          >
-            Show Normal Text
-          </button>
+          </span>
         </div>
       )}
 
@@ -429,7 +551,7 @@ export default function MessageEditor({ value, mode, onChange, isTemplate = fals
         <textarea
           id="body-html"
           value={value}
-          onChange={(event) => onChange(event.target.value)}
+          onChange={(event) => handleHtmlChange(event.target.value)}
           placeholder="Paste or write your email HTML here..."
           rows={14}
           spellCheck={false}
@@ -437,15 +559,46 @@ export default function MessageEditor({ value, mode, onChange, isTemplate = fals
           aria-required="true"
           className="w-full resize-y rounded-lg border border-slate-200 px-3.5 py-2.5 font-mono text-xs leading-relaxed text-slate-800 placeholder:text-slate-400 shadow-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
         />
-      ) : isFullDocument ? (
-        <iframe
-          title="Rendered HTML template"
-          srcDoc={visualTemplateHtml ?? sanitizeEmailHtml(value)}
-          ref={templateFrameRef}
-          onLoad={handleTemplateFrameLoad}
-          sandbox="allow-same-origin allow-popups"
-          className="block h-[520px] w-full rounded-lg border border-slate-200 bg-white shadow-sm"
-        />
+      ) : isTemplate && isFullDocument ? (
+        <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+          <div className="flex flex-wrap items-center gap-1 border-b border-slate-100 bg-slate-50 p-2" role="toolbar" aria-label="Template text formatting toolbar">
+            <ToolbarButton label="B" title="Bold selected template text" onClick={() => applyVisualTemplateFormat("bold")} />
+            <ToolbarButton label="I" title="Italicize selected template text" onClick={() => applyVisualTemplateFormat("italic")} />
+            <ToolbarButton label="U" title="Underline selected template text" onClick={() => applyVisualTemplateFormat("underline")} />
+            <ToolbarButton label="Link" title="Add link to selected template text" onClick={addVisualTemplateLink} />
+            <span className="mx-1 h-5 w-px bg-slate-200" aria-hidden="true" />
+            <span className="px-2 text-xs font-semibold text-slate-600">Highlight</span>
+            {HIGHLIGHT_COLORS.map((color) => (
+              <button
+                key={color.value}
+                type="button"
+                title={color.name}
+                aria-label={color.name}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => applyVisualTemplateFormat("highlight", color.value)}
+                className="h-6 w-6 rounded border border-slate-300 shadow-sm"
+                style={{ backgroundColor: color.value }}
+              />
+            ))}
+            <span className="mx-1 h-5 w-px bg-slate-200" aria-hidden="true" />
+            {FONT_SIZE_OPTIONS.map((option) => (
+              <ToolbarButton
+                key={option.value}
+                label={option.label}
+                title={`Set selected template text to ${option.label.toLowerCase()} size`}
+                onClick={() => applyVisualTemplateFormat("fontSize", option.value)}
+              />
+            ))}
+          </div>
+          <iframe
+            title="Editable rendered email template"
+            ref={templateFrameRef}
+            srcDoc={visualTemplateHtml ?? sanitizeEmailHtml(value)}
+            onLoad={handleTemplateFrameLoad}
+            sandbox="allow-same-origin allow-popups"
+            className="block h-[520px] w-full border-0 bg-white"
+          />
+        </div>
       ) : (
         <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm focus-within:border-transparent focus-within:ring-2 focus-within:ring-blue-500">
           <div className="flex flex-wrap items-center gap-1 border-b border-slate-100 bg-slate-50 p-2" role="toolbar" aria-label="Text formatting toolbar">
