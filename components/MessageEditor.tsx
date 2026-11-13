@@ -152,6 +152,15 @@ function mergeEditableContent(source: string, content: string): string {
   return `<!doctype html>\n${document.documentElement.outerHTML}`;
 }
 
+function serializeTemplateDocument(document: Document) {
+  const documentElement = document.documentElement.cloneNode(true) as HTMLElement;
+  documentElement.querySelectorAll("[contenteditable], [spellcheck]").forEach((element) => {
+    element.removeAttribute("contenteditable");
+    element.removeAttribute("spellcheck");
+  });
+  return `<!doctype html>\n${documentElement.outerHTML}`;
+}
+
 function getBlockStyle(editor: Editor) {
   if (editor.isActive("heading", { level: 1 })) return "h1";
   if (editor.isActive("heading", { level: 2 })) return "h2";
@@ -397,34 +406,25 @@ export default function MessageEditor({ value, mode, onChange, isTemplate = fals
     if (!visualTemplateHtml) setVisualTemplateHtml(sanitizeEmailHtml(value));
 
     const commitTemplateChanges = () => {
-      const updatedDocument = `<!doctype html>\n${templateDocument.documentElement.outerHTML}`;
-      onChange(sanitizeEmailHtml(updatedDocument));
+      onChange(sanitizeEmailHtml(serializeTemplateDocument(templateDocument)));
     };
 
     templateDocument.addEventListener("selectionchange", () => {
       const selection = templateDocument.getSelection();
-      if (selection && selection.rangeCount > 0 && !selection.isCollapsed) {
-        templateRangeRef.current = selection.getRangeAt(0).cloneRange();
+      if (selection && selection.rangeCount > 0) {
+        const range = selection.getRangeAt(0);
+        if (templateDocument.body.contains(range.commonAncestorContainer)) {
+          templateRangeRef.current = range.cloneRange();
+        }
       }
     });
 
-    const candidates = Array.from(
-      templateDocument.body.querySelectorAll<HTMLElement>("p, h1, h2, h3, h4, h5, h6, li, a, td, th, span, div")
-    ).filter((element) => {
-      if (!element.textContent?.trim()) return false;
-      return !element.querySelector("table, ul, ol, p, h1, h2, h3, h4, h5, h6, li");
-    });
-
-    const editableElements = candidates.filter(
-      (element) => !candidates.some((ancestor) => ancestor !== element && ancestor.contains(element))
-    );
-
-    editableElements.forEach((element) => {
-      element.contentEditable = "true";
-      element.spellcheck = true;
-      element.style.cursor = "text";
-      element.addEventListener("input", commitTemplateChanges);
-    });
+    // Edit the rendered document directly so the template's original DOM and
+    // styles stay intact. Restricting contentEditable to leaf elements made
+    // headers, list items, table cells, and other content appear read-only.
+    templateDocument.body.contentEditable = "true";
+    templateDocument.body.spellcheck = true;
+    templateDocument.body.addEventListener("input", commitTemplateChanges);
 
     templateDocument.addEventListener("click", (event) => {
       if ((event.target as HTMLElement).closest("a")) event.preventDefault();
@@ -435,8 +435,7 @@ export default function MessageEditor({ value, mode, onChange, isTemplate = fals
     const templateDocument = templateFrameRef.current?.contentDocument;
     if (!templateDocument) return;
 
-    const updatedDocument = `<!doctype html>\n${templateDocument.documentElement.outerHTML}`;
-    onChange(sanitizeEmailHtml(updatedDocument));
+    onChange(sanitizeEmailHtml(serializeTemplateDocument(templateDocument)));
   };
 
   const applyVisualTemplateFormat = (format: "bold" | "italic" | "underline" | "highlight" | "fontSize", value?: string) => {
@@ -496,6 +495,31 @@ export default function MessageEditor({ value, mode, onChange, isTemplate = fals
     commitVisualTemplateChanges();
   };
 
+  const handleInsertVisualRecipientVariable = (recipientVariable: string) => {
+    const templateDocument = templateFrameRef.current?.contentDocument;
+    const savedRange = templateRangeRef.current;
+    if (!templateDocument?.body || !savedRange || !templateDocument.body.contains(savedRange.commonAncestorContainer)) {
+      return;
+    }
+
+    const selection = templateDocument.getSelection();
+    if (!selection) return;
+
+    selection.removeAllRanges();
+    selection.addRange(savedRange);
+    savedRange.deleteContents();
+
+    const tokenNode = templateDocument.createTextNode(recipientVariable);
+    savedRange.insertNode(tokenNode);
+    savedRange.setStartAfter(tokenNode);
+    savedRange.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(savedRange);
+    templateRangeRef.current = savedRange.cloneRange();
+    commitVisualTemplateChanges();
+    setRecipientVariableMenuOpen(false);
+  };
+
   return (
     <div>
       <div className="mb-1.5 flex flex-wrap items-start justify-between gap-3">
@@ -507,7 +531,7 @@ export default function MessageEditor({ value, mode, onChange, isTemplate = fals
             {isTemplate
               ? showHtmlSource
                 ? "Edit the HTML source or switch back to the visual editor."
-                : "Use the formatting tools to edit your template. Switch on Show HTML to edit the source."
+                : "Click anywhere in the rendered template to edit it. Switch on Show HTML to edit the source."
               : "Use the formatting tools to edit your message."}
           </p>
         </div>
@@ -566,6 +590,41 @@ export default function MessageEditor({ value, mode, onChange, isTemplate = fals
             <ToolbarButton label="I" title="Italicize selected template text" onClick={() => applyVisualTemplateFormat("italic")} />
             <ToolbarButton label="U" title="Underline selected template text" onClick={() => applyVisualTemplateFormat("underline")} />
             <ToolbarButton label="Link" title="Add link to selected template text" onClick={addVisualTemplateLink} />
+            <div className="relative">
+              <button
+                type="button"
+                title="Insert recipient name"
+                aria-label="Insert recipient name"
+                aria-haspopup="menu"
+                aria-expanded={recipientVariableMenuOpen}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => setRecipientVariableMenuOpen((open) => !open)}
+                className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-white hover:text-[#8c1d40]"
+              >
+                <span aria-hidden="true">@</span>
+                <span>Recipient name</span>
+                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
+                </svg>
+              </button>
+              {recipientVariableMenuOpen && (
+                <div className="absolute left-0 top-full z-10 mt-1 min-w-36 rounded-lg border border-slate-200 bg-white p-1 shadow-lg" role="menu">
+                  {RECIPIENT_VARIABLES.map((variable) => (
+                    <button
+                      key={variable.value}
+                      type="button"
+                      role="menuitem"
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => handleInsertVisualRecipientVariable(variable.value)}
+                      className="flex w-full items-center justify-between rounded-md px-2.5 py-2 text-left text-sm text-slate-600 transition-colors hover:bg-rose-50 hover:text-[#8c1d40]"
+                    >
+                      <span>{variable.label}</span>
+                      <code className="ml-3 text-[11px] text-slate-400">{variable.value}</code>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <span className="mx-1 h-5 w-px bg-slate-200" aria-hidden="true" />
             <span className="px-2 text-xs font-semibold text-slate-600">Highlight</span>
             {HIGHLIGHT_COLORS.map((color) => (
