@@ -33,12 +33,12 @@ function escapeHtml(value: string) {
 function replaceRecipientTokens(value: string) {
   return value.replace(/{{\s*(first_name|last_name|full_name|name)\s*}}/gi, (_, token: string) => {
     const previews: Record<string, string> = {
-      first_name: "Jordan",
-      last_name: "Lee",
-      full_name: "Jordan Lee",
-      name: "Jordan Lee",
+      first_name: "Oscar",
+      last_name: "Panther",
+      full_name: "Oscar the Panther",
+      name: "Oscar Panther",
     };
-    return previews[token.toLowerCase()] ?? "Jordan";
+    return previews[token.toLowerCase()] ?? "Oscar";
   });
 }
 
