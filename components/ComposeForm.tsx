@@ -11,7 +11,7 @@ import { deleteSavedTemplate, fetchTemplates, saveTemplate } from "@/lib/storage
 
 const SES_RECIPIENT_LIMIT = 50;
 const SEND_BATCH_TIMEOUT_MS = 30_000;
-const SES_BATCH_DELAY_MS = 2_500;
+const SES_BATCH_DELAY_MS = 500;
 const PERSONALIZATION_TOKEN_PATTERN = /{{\s*(?:first_name|last_name|full_name|name)\s*}}/i;
 
 function hasToken(value: string, token: string): boolean {
