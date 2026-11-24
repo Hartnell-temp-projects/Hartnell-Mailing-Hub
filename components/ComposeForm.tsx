@@ -33,6 +33,11 @@ function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+function localDateTimeValue(date: Date): string {
+  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return localDate.toISOString().slice(0, 16);
+}
+
 interface SendResponse {
   sentRecipients?: string[];
   failedRecipients?: string[];
@@ -66,6 +71,12 @@ export default function ComposeForm() {
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   const [loading, setLoading] = useState(false);
+  const [deliveryMode, setDeliveryMode] = useState<"send" | "schedule">("send");
+  const [scheduleMenuOpen, setScheduleMenuOpen] = useState(false);
+  const [scheduleAt, setScheduleAt] = useState("");
+  const [scheduleMinimum] = useState(() =>
+    localDateTimeValue(new Date(Date.now() + 60_000))
+  );
   const [status, setStatus] = useState<Status>(null);
   const [progress, setProgress] = useState<{ sent: number; total: number } | null>(null);
   const [sendRecovery, setSendRecovery] = useState<SendRecovery | null>(null);
@@ -154,6 +165,9 @@ export default function ComposeForm() {
     setPersonalizedRecipients([]);
     setSubject("");
     setBody("");
+    setDeliveryMode("send");
+    setScheduleMenuOpen(false);
+    setScheduleAt("");
     setIsTemplateDraft(false);
     setStatus(null);
   };
@@ -424,6 +438,75 @@ export default function ComposeForm() {
       }
     }
 
+    if (deliveryMode === "schedule") {
+      if (usesPersonalization) {
+        setStatus({
+          type: "error",
+          message:
+            "Scheduled personalized messages are not supported yet. Use Send Email now for recipient-name tokens.",
+        });
+        return;
+      }
+
+      const scheduledDate = new Date(scheduleAt);
+      if (!scheduleAt || Number.isNaN(scheduledDate.getTime()) || scheduledDate <= new Date()) {
+        setStatus({
+          type: "error",
+          message: "Choose a future date and time before scheduling the email.",
+        });
+        return;
+      }
+
+      const scheduledRecipients = [...to, ...cc, ...bcc];
+      if (scheduledRecipients.length > SES_RECIPIENT_LIMIT) {
+        setStatus({
+          type: "error",
+          message: `Scheduled emails currently support up to ${SES_RECIPIENT_LIMIT} recipients.`,
+        });
+        return;
+      }
+
+      setLoading(true);
+      setStatus(null);
+
+      try {
+        const response = await fetch("/api/email-schedules", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sendAt: scheduledDate.toISOString(),
+            to: to.map((recipient) => recipient.email),
+            cc: cc.map((recipient) => recipient.email),
+            bcc: bcc.map((recipient) => recipient.email),
+            subject,
+            html: body,
+          }),
+        });
+        const responseBody = (await response.json().catch(() => ({}))) as {
+          error?: string;
+        };
+
+        if (!response.ok) {
+          throw new Error(responseBody.error || "The email could not be scheduled.");
+        }
+
+        setStatus({
+          type: "success",
+          message: `Email scheduled for ${scheduledDate.toLocaleString()}.`,
+        });
+        setScheduleMenuOpen(false);
+      } catch (error) {
+        setStatus({
+          type: "error",
+          message: error instanceof Error ? error.message : "The email could not be scheduled.",
+        });
+      } finally {
+        setLoading(false);
+      }
+
+      return;
+    }
+
     clearSendRecovery();
     await sendRecipientEmails(
       bcc.map((recipient) => recipient.email),
@@ -558,7 +641,7 @@ export default function ComposeForm() {
           </div>
 
           {/* Footer */}
-          <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between gap-4">
+          <div className="relative px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between gap-4">
             <div className="text-xs text-slate-400">
               {totalRecipients > 0 && (
                 <span>
@@ -571,41 +654,116 @@ export default function ComposeForm() {
                 </span>
               )}
             </div>
-            <button
-              type="submit"
-              disabled={loading}
-              className="flex items-center gap-2 px-6 py-2.5 bg-[#ffc627] hover:bg-[#e6ae22] disabled:opacity-60 disabled:cursor-not-allowed text-black text-sm font-semibold rounded-lg shadow-sm transition-colors"
-            >
-              {loading ? (
-                <>
-                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-                  </svg>
-                  {progress && progress.total > 1
-                    ? `Sending batch ${progress.sent}/${progress.total}…`
-                    : "Sending…"}
-                </>
-              ) : (
-                <>
-                  <svg
-                    className="w-4 h-4"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth={2}
+            <div className="relative flex items-stretch">
+              <button
+                type="submit"
+                disabled={loading}
+                className="flex items-center gap-2 rounded-l-lg bg-[#ffc627] px-6 py-2.5 text-sm font-semibold text-black shadow-sm transition-colors hover:bg-[#e6ae22] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {loading ? (
+                  <>
+                    <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                    </svg>
+                    {deliveryMode === "schedule"
+                      ? "Scheduling…"
+                      : progress && progress.total > 1
+                        ? `Sending batch ${progress.sent}/${progress.total}…`
+                        : "Sending…"}
+                  </>
+                ) : (
+                  <>
+                    <svg
+                      className="h-4 w-4"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5"
+                      />
+                    </svg>
+                    {deliveryMode === "schedule" ? "Schedule send" : "Send Email"}
+                  </>
+                )}
+              </button>
+              <button
+                type="button"
+                aria-label="Choose send option"
+                aria-expanded={scheduleMenuOpen}
+                onClick={() => setScheduleMenuOpen((open) => !open)}
+                disabled={loading}
+                className="rounded-r-lg border-l border-black/10 bg-[#ffc627] px-3 text-black shadow-sm transition-colors hover:bg-[#e6ae22] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <span aria-hidden="true">⌃</span>
+              </button>
+
+              {scheduleMenuOpen && (
+                <div className="absolute bottom-full right-0 z-20 mb-2 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white p-1 shadow-lg">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDeliveryMode("send");
+                      setScheduleMenuOpen(false);
+                    }}
+                    className={`block w-full rounded-md px-3 py-2 text-left text-sm font-semibold transition-colors hover:bg-slate-100 ${
+                      deliveryMode === "send" ? "text-[#8c1d40]" : "text-slate-700"
+                    }`}
                   >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5"
-                    />
-                  </svg>
-                  Send Email
-                </>
+                    Send now
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDeliveryMode("schedule");
+                      setScheduleAt((current) => current || localDateTimeValue(new Date(Date.now() + 5 * 60_000)));
+                      setScheduleMenuOpen(false);
+                    }}
+                    className={`block w-full rounded-md px-3 py-2 text-left text-sm font-semibold transition-colors hover:bg-slate-100 ${
+                      deliveryMode === "schedule" ? "text-[#8c1d40]" : "text-slate-700"
+                    }`}
+                  >
+                    Schedule send
+                  </button>
+                </div>
               )}
-            </button>
+            </div>
           </div>
+
+          {deliveryMode === "schedule" && (
+            <div className="border-t border-slate-100 bg-amber-50 px-6 py-4">
+              <label htmlFor="schedule-at" className="block text-sm font-semibold text-slate-700">
+                Schedule send
+              </label>
+              <div className="mt-2 flex flex-wrap items-center gap-3">
+                <input
+                  id="schedule-at"
+                  type="datetime-local"
+                  value={scheduleAt}
+                  min={scheduleMinimum}
+                  onChange={(event) => setScheduleAt(event.target.value)}
+                  className="rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDeliveryMode("send");
+                    setScheduleMenuOpen(false);
+                  }}
+                  className="text-sm font-semibold text-[#8c1d40] hover:underline"
+                >
+                  Cancel scheduling
+                </button>
+              </div>
+              <p className="mt-2 text-xs text-amber-800">
+                Scheduled sends currently support up to 50 recipients and do not support recipient-name personalization.
+              </p>
+            </div>
+          )}
         </form>
 
         {status && <StatusBanner status={status} />}

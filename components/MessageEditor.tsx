@@ -114,24 +114,34 @@ function escapeHtml(value: string) {
 
 function getEditableContent(value: string) {
   const trimmedValue = value.trim();
-  if (!trimmedValue) return "<p></p>";
+  if (!trimmedValue) {
+    return "<p></p>";
+  }
   if (FULL_DOCUMENT_PATTERN.test(trimmedValue)) {
     if (typeof DOMParser !== "undefined") {
       const document = new DOMParser().parseFromString(value, "text/html");
       const editableRegion = findEditableRegion(document);
-      if (editableRegion) return editableRegion.innerHTML || "<p></p>";
+      if (editableRegion) {
+        return editableRegion.innerHTML || "<p></p>";
+      }
     }
 
     const bodyMatch = value.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
-    if (bodyMatch?.[1]) return bodyMatch[1];
+    if (bodyMatch?.[1]) {
+      return bodyMatch[1];
+    }
   }
-  if (/<[a-z][\s\S]*>/i.test(trimmedValue)) return value;
+  if (/<[a-z][\s\S]*>/i.test(trimmedValue)) {
+    return value;
+  }
   return `<p>${escapeHtml(value).replace(/\r?\n/g, "<br />")}</p>`;
 }
 
 function findEditableRegion(document: Document): HTMLElement | null {
   const markedRegion = document.querySelector<HTMLElement>("[data-editable-region='body']");
-  if (markedRegion) return markedRegion;
+  if (markedRegion) {
+    return markedRegion;
+  }
 
   const candidates = Array.from(document.querySelectorAll<HTMLElement>("main, article, section, td, div"))
     .filter((element) => element.querySelector("p, ul, ol, li") && !element.querySelector("table"));
@@ -146,7 +156,9 @@ function mergeEditableContent(source: string, content: string): string {
 
   const document = new DOMParser().parseFromString(source, "text/html");
   const editableRegion = findEditableRegion(document);
-  if (!editableRegion) return content;
+  if (!editableRegion) {
+    return content;
+  }
 
   editableRegion.innerHTML = content;
   return `<!doctype html>\n${document.documentElement.outerHTML}`;
@@ -162,10 +174,18 @@ function serializeTemplateDocument(document: Document) {
 }
 
 function getBlockStyle(editor: Editor) {
-  if (editor.isActive("heading", { level: 1 })) return "h1";
-  if (editor.isActive("heading", { level: 2 })) return "h2";
-  if (editor.isActive("heading", { level: 3 })) return "h3";
-  if (editor.isActive("blockquote")) return "blockquote";
+  if (editor.isActive("heading", { level: 1 })) {
+    return "h1";
+  }
+  if (editor.isActive("heading", { level: 2 })) {
+    return "h2";
+  }
+  if (editor.isActive("heading", { level: 3 })) {
+    return "h3";
+  }
+  if (editor.isActive("blockquote")) {
+    return "blockquote";
+  }
   return "p";
 }
 
@@ -194,8 +214,12 @@ function colorsMatch(first: string, second: string) {
   const normalizedFirst = normalize(first);
   const normalizedSecond = normalize(second);
 
-  if (normalizedFirst === normalizedSecond) return true;
-  if (!normalizedSecond.startsWith("#") || normalizedSecond.length !== 7) return false;
+  if (normalizedFirst === normalizedSecond) {
+    return true;
+  }
+  if (!normalizedSecond.startsWith("#") || normalizedSecond.length !== 7) {
+    return false;
+  }
 
   const red = parseInt(normalizedSecond.slice(1, 3), 16);
   const green = parseInt(normalizedSecond.slice(3, 5), 16);
@@ -400,6 +424,17 @@ export default function MessageEditor({ value, mode, onChange, isTemplate = fals
     onChange(nextValue);
   };
 
+  const saveTemplateSelection = () => {
+    const templateDocument = templateFrameRef.current?.contentDocument;
+    const selection = templateDocument?.getSelection();
+    if (!templateDocument?.body || !selection || selection.rangeCount === 0) return;
+
+    const range = selection.getRangeAt(0);
+    if (templateDocument.body.contains(range.commonAncestorContainer)) {
+      templateRangeRef.current = range.cloneRange();
+    }
+  };
+
   const handleTemplateFrameLoad = () => {
     const templateDocument = templateFrameRef.current?.contentDocument;
     if (!templateDocument?.body) return;
@@ -409,15 +444,10 @@ export default function MessageEditor({ value, mode, onChange, isTemplate = fals
       onChange(sanitizeEmailHtml(serializeTemplateDocument(templateDocument)));
     };
 
-    templateDocument.addEventListener("selectionchange", () => {
-      const selection = templateDocument.getSelection();
-      if (selection && selection.rangeCount > 0) {
-        const range = selection.getRangeAt(0);
-        if (templateDocument.body.contains(range.commonAncestorContainer)) {
-          templateRangeRef.current = range.cloneRange();
-        }
-      }
-    });
+    templateDocument.addEventListener("selectionchange", saveTemplateSelection);
+    templateDocument.addEventListener("mouseup", saveTemplateSelection);
+    templateDocument.addEventListener("keyup", saveTemplateSelection);
+    templateDocument.defaultView?.addEventListener("selectionchange", saveTemplateSelection);
 
     // Edit the rendered document directly so the template's original DOM and
     // styles stay intact. Restricting contentEditable to leaf elements made
@@ -427,7 +457,9 @@ export default function MessageEditor({ value, mode, onChange, isTemplate = fals
     templateDocument.body.addEventListener("input", commitTemplateChanges);
 
     templateDocument.addEventListener("click", (event) => {
-      if ((event.target as HTMLElement).closest("a")) event.preventDefault();
+      if ((event.target as HTMLElement).closest("a")) {
+        event.preventDefault();
+      }
     });
   };
 
@@ -454,13 +486,17 @@ export default function MessageEditor({ value, mode, onChange, isTemplate = fals
       : savedRange.endContainer as HTMLElement;
     const startRegion = startElement?.closest("[contenteditable='true']");
     const endRegion = endElement?.closest("[contenteditable='true']");
-    if (!startRegion || startRegion !== endRegion) return;
+    if (!startRegion || startRegion !== endRegion) { return }
 
     const wrapper = templateDocument.createElement(
       format === "bold" ? "strong" : format === "italic" ? "em" : format === "underline" ? "u" : "span"
     );
-    if (format === "highlight") wrapper.style.backgroundColor = value || HIGHLIGHT_COLORS[0].value;
-    if (format === "fontSize") wrapper.style.fontSize = value || FONT_SIZE_OPTIONS[1].value;
+    if (format === "highlight") {
+      wrapper.style.backgroundColor = value || HIGHLIGHT_COLORS[0].value;
+    }
+    if (format === "fontSize") {
+      wrapper.style.fontSize = value || FONT_SIZE_OPTIONS[1].value;
+    }
 
     selection.removeAllRanges();
     selection.addRange(savedRange);
@@ -508,7 +544,6 @@ export default function MessageEditor({ value, mode, onChange, isTemplate = fals
     selection.removeAllRanges();
     selection.addRange(savedRange);
     savedRange.deleteContents();
-
     const tokenNode = templateDocument.createTextNode(recipientVariable);
     savedRange.insertNode(tokenNode);
     savedRange.setStartAfter(tokenNode);
@@ -597,7 +632,10 @@ export default function MessageEditor({ value, mode, onChange, isTemplate = fals
                 aria-label="Insert recipient name"
                 aria-haspopup="menu"
                 aria-expanded={recipientVariableMenuOpen}
-                onMouseDown={(event) => event.preventDefault()}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  saveTemplateSelection();
+                }}
                 onClick={() => setRecipientVariableMenuOpen((open) => !open)}
                 className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-white hover:text-[#8c1d40]"
               >
