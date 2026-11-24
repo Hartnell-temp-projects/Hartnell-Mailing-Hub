@@ -11,7 +11,7 @@ import { deleteSavedTemplate, fetchTemplates, saveTemplate } from "@/lib/storage
 
 const SES_RECIPIENT_LIMIT = 50;
 const SEND_BATCH_TIMEOUT_MS = 30_000;
-const SES_BATCH_DELAY_MS = 2_500;
+const SES_BATCH_DELAY_MS = 500;
 const PERSONALIZATION_TOKEN_PATTERN = /{{\s*(?:first_name|last_name|full_name|name)\s*}}/i;
 
 function hasToken(value: string, token: string): boolean {
@@ -58,6 +58,7 @@ function uniqueEmails(emails: string[]): string[] {
 export default function ComposeForm() {
   const [composeMode, setComposeMode] = useState<"choice" | "compose">("choice");
   const [editorMode, setEditorMode] = useState<EditorMode>("rich");
+  const [isTemplateDraft, setIsTemplateDraft] = useState(false);
   const [to, setTo] = useState<EmailTag[]>([]);
   const [cc, setCc] = useState<EmailTag[]>([]);
   const [bcc, setBcc] = useState<EmailTag[]>([]);
@@ -153,6 +154,7 @@ export default function ComposeForm() {
     setPersonalizedRecipients([]);
     setSubject("");
     setBody("");
+    setIsTemplateDraft(false);
     setStatus(null);
   };
 
@@ -166,6 +168,7 @@ export default function ComposeForm() {
     resetDraft();
     setSubject(template.subject);
     setBody(template.content);
+    setIsTemplateDraft(true);
     setEditorMode("rich");
     setComposeMode("compose");
   };
@@ -546,6 +549,7 @@ export default function ComposeForm() {
             <MessageEditor
               value={body}
               mode={editorMode}
+              isTemplate={isTemplateDraft}
               onChange={(value) => {
                 clearSendRecovery();
                 setBody(value);

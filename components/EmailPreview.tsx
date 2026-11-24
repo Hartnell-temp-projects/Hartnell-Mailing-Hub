@@ -1,4 +1,5 @@
 import { EmailTag } from "./types";
+import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 
 interface Props {
   to: EmailTag[];
@@ -32,12 +33,12 @@ function escapeHtml(value: string) {
 function replaceRecipientTokens(value: string) {
   return value.replace(/{{\s*(first_name|last_name|full_name|name)\s*}}/gi, (_, token: string) => {
     const previews: Record<string, string> = {
-      first_name: "Jordan",
-      last_name: "Lee",
-      full_name: "Jordan Lee",
-      name: "Jordan Lee",
+      first_name: "Oscar",
+      last_name: "Panther",
+      full_name: "Oscar the Panther",
+      name: "Oscar Panther",
     };
-    return previews[token.toLowerCase()] ?? "Jordan";
+    return previews[token.toLowerCase()] ?? "Oscar";
   });
 }
 
@@ -49,12 +50,14 @@ function createPreviewDocument(body: string) {
   const trimmedBody = body.trim();
   const isFullDocument = /<!doctype\s+html|<html[\s>]/i.test(trimmedBody);
   if (isFullDocument) {
-    return replaceRecipientTokens(body);
+    return sanitizeEmailHtml(replaceRecipientTokens(body));
   }
 
   const previewBody = replaceNonBreakingSpaces(replaceRecipientTokens(body));
   const hasMarkup = /<[a-z][\s\S]*>/i.test(previewBody);
-  const content = hasMarkup ? previewBody : escapeHtml(previewBody).replace(/\r?\n/g, "<br />");
+  const content = hasMarkup
+    ? sanitizeEmailHtml(previewBody)
+    : escapeHtml(previewBody).replace(/\r?\n/g, "<br />");
 
   return `<!doctype html>
   <html lang="en">

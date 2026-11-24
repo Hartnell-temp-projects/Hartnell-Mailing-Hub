@@ -9,7 +9,9 @@ export async function DELETE(
   ctx: RouteContext<"/api/email-templates/[id]">
 ) {
   const user = await requireStorageUser(request);
-  if (user instanceof NextResponse) return user;
+  if (user instanceof NextResponse) {
+    return user;
+  }
 
   const { id } = await ctx.params;
 
