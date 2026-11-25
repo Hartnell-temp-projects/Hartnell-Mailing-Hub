@@ -63,7 +63,18 @@ test.describe("email editor browser compatibility", () => {
     await expect(editor).toContainText("{{first_name}}");
 
     const preview = page.frameLocator('iframe[title="Rendered email body preview"]');
-    await expect(preview.locator("body")).toContainText("Hi Jordan, welcome to Hartnell.");
+    await expect(preview.locator("body")).toContainText("Hi Oscar, welcome to Hartnell.");
+  });
+
+  test("inserts a personalization token from the recipient-name menu", async ({ page }) => {
+    await page.getByRole("button", { name: /Start from scratch/ }).click();
+
+    const editor = page.locator('#body-editor [contenteditable="true"]');
+    await editor.fill("Dear ");
+    await page.getByRole("button", { name: "Insert recipient name" }).click();
+    await page.getByRole("menuitem", { name: /First name/ }).click();
+
+    await expect(editor).toContainText("Dear {{first_name}}");
   });
 
   test("loads a styled template and preserves its structure when adding a name token", async ({ page }) => {
@@ -87,10 +98,24 @@ test.describe("email editor browser compatibility", () => {
     await expect(htmlEditor).toContainText("<ul>");
 
     const preview = page.frameLocator('iframe[title="Rendered email body preview"]');
-    await expect(preview.locator("body")).toContainText("Jordan");
+    await expect(preview.locator("body")).toContainText("Oscar");
 
     await htmlToggle.click();
     await expect(page.getByTitle("Editable rendered email template")).toBeVisible();
     await expect(page.frameLocator('iframe[title="Editable rendered email template"]').locator("body")).toContainText("{{first_name}}");
+  });
+
+  test("updates the preview when ordinary template text is edited", async ({ page }) => {
+    await page.getByRole("button", { name: /IT Security Notice.*Use/ }).click();
+
+    const templateFrame = page.frameLocator('iframe[title="Editable rendered email template"]');
+    const paragraph = templateFrame.locator("p").nth(1);
+    await paragraph.click();
+    await page.keyboard.press("End");
+    await page.keyboard.type(" Edited");
+    await expect(templateFrame.locator("body")).toContainText("Welcome to the campus communication test. Edited");
+
+    const preview = page.frameLocator('iframe[title="Rendered email body preview"]');
+    await expect(preview.locator("body")).toContainText("Welcome to the campus communication test. Edited");
   });
 });

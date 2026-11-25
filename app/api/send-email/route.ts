@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createHash } from "node:crypto";
 import {
   CreateTemplateCommand,
   SESClient,
@@ -14,7 +15,16 @@ import type { RecipientRecord } from "@/components/types";
 const AWS_REGION = process.env.AWS_REGION ?? "us-west-2";
 const sts = new STSClient({ region: AWS_REGION });
 const SES_RECIPIENT_LIMIT = 50;
-const TEMPLATE_NAME = process.env.SES_TEMPLATE_NAME?.trim() || "HartnellMailerPersonalized";
+const TEMPLATE_NAME_PREFIX = process.env.SES_TEMPLATE_NAME?.trim() || "HartnellMailerPersonalized";
+
+function personalizedTemplateName(userSubject: string): string {
+  // Hash the OIDC subject so the SES template name does not expose the user's
+  // identifier while still giving each authenticated user a separate template.
+  const userSuffix = createHash("sha256").update(userSubject).digest("hex").slice(0, 16);
+  const maxPrefixLength = 64 - userSuffix.length - 1;
+
+  return `${TEMPLATE_NAME_PREFIX.slice(0, maxPrefixLength)}-${userSuffix}`;
+}
 
 // SES lives in another account; assume SES_ROLE_ARN there (same pattern as Redshift in /api/db).
 async function getSesClient(stsClient: STSClient): Promise<SESClient> {
@@ -78,9 +88,14 @@ function htmlToText(html: string): string {
     .trim();
 }
 
-async function ensureSesTemplate(ses: SESClient, subject: string, content: string) {
+async function ensureSesTemplate(
+  ses: SESClient,
+  templateName: string,
+  subject: string,
+  content: string
+) {
   const template = {
-    TemplateName: TEMPLATE_NAME,
+    TemplateName: templateName,
     SubjectPart: subject,
     HtmlPart: content,
     TextPart: htmlToText(content),
@@ -130,6 +145,7 @@ function validatePersonalizedFields(subject: string, content: string, recipients
 }
 
 async function sendPersonalizedEmail(ses: SESClient, {
+  templateName,
   subject,
   content,
   to,
@@ -137,6 +153,7 @@ async function sendPersonalizedEmail(ses: SESClient, {
   personalizedRecipients,
   personalizedDestination,
 }: {
+  templateName: string;
   subject: string;
   content: string;
   to: string[];
@@ -148,7 +165,7 @@ async function sendPersonalizedEmail(ses: SESClient, {
   failedRecipients: string[];
   failureReasons: Record<string, string>;
 }> {
-  await ensureSesTemplate(ses, subject, content);
+  await ensureSesTemplate(ses, templateName, subject, content);
   const sentRecipients: string[] = [];
   const failedRecipients: string[] = [];
   const failureReasons: Record<string, string> = {};
@@ -158,7 +175,7 @@ async function sendPersonalizedEmail(ses: SESClient, {
     const response = await ses.send(
       new SendBulkTemplatedEmailCommand({
         Source: process.env.SES_FROM_ADDRESS,
-        Template: TEMPLATE_NAME,
+        Template: templateName,
         DefaultTemplateData: templateData({ email: "", firstName: "there" }),
         Destinations: batch.map((recipient) => ({
           Destination:
@@ -193,7 +210,8 @@ async function sendPersonalizedEmail(ses: SESClient, {
 }
 
 export async function POST(req: NextRequest) {
-  if (!(await getSession(req))) {
+  const session = await getSession(req);
+  if (!session) {
     return NextResponse.json(
       { error: "Authentication is required before sending email." },
       { status: 401 }
@@ -257,6 +275,7 @@ export async function POST(req: NextRequest) {
     }
 
     const result = await sendPersonalizedEmail(ses, {
+      templateName: personalizedTemplateName(session.subject),
       subject,
       content: cleanContent,
       to: toAddresses,
