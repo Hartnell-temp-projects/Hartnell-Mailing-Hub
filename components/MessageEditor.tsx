@@ -271,6 +271,7 @@ function ToolbarButton({
 }
 
 export default function MessageEditor({ value, mode, onChange, isTemplate = false }: Props) {
+  const editorSelectionRef = useRef<{ from: number; to: number } | null>(null);
   const templateFrameRef = useRef<HTMLIFrameElement>(null);
   const templateRangeRef = useRef<Range | null>(null);
   const templateSourceRef = useRef<string | null>(null);
@@ -413,8 +414,22 @@ export default function MessageEditor({ value, mode, onChange, isTemplate = fals
     if (!editor) {
       return;
     }
+
+    const savedSelection = editorSelectionRef.current;
+    if (savedSelection) {
+      editor.commands.setTextSelection(savedSelection);
+    }
     runCommand(() => editor.chain().focus().insertContent(recipientVariable).run());
     setRecipientVariableMenuOpen(false);
+  };
+
+  const saveEditorSelection = () => {
+    if (!editor) {
+      return;
+    }
+
+    const { from, to } = editor.state.selection;
+    editorSelectionRef.current = { from, to };
   };
 
   const handleHtmlChange = (nextValue: string) => {
@@ -441,7 +456,11 @@ export default function MessageEditor({ value, mode, onChange, isTemplate = fals
     if (!visualTemplateHtml) setVisualTemplateHtml(sanitizeEmailHtml(value));
 
     const commitTemplateChanges = () => {
-      onChange(sanitizeEmailHtml(serializeTemplateDocument(templateDocument)));
+      // Defer serialization until after Safari has applied the edit to the
+      // contentEditable document.
+      window.requestAnimationFrame(() => {
+        onChange(sanitizeEmailHtml(serializeTemplateDocument(templateDocument)));
+      });
     };
 
     templateDocument.addEventListener("selectionchange", saveTemplateSelection);
@@ -454,7 +473,19 @@ export default function MessageEditor({ value, mode, onChange, isTemplate = fals
     // headers, list items, table cells, and other content appear read-only.
     templateDocument.body.contentEditable = "true";
     templateDocument.body.spellcheck = true;
-    templateDocument.body.addEventListener("input", commitTemplateChanges);
+    // Safari/WebKit does not reliably bubble contentEditable input events to
+    // the body element. Capture them at the iframe document so ordinary text
+    // edits and pasted text update the parent state and live preview.
+    templateDocument.addEventListener("input", commitTemplateChanges, true);
+    templateDocument.addEventListener("keyup", commitTemplateChanges);
+    templateDocument.addEventListener("paste", commitTemplateChanges);
+    const templateObserver = new MutationObserver(commitTemplateChanges);
+    templateObserver.observe(templateDocument.body, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+      attributes: true,
+    });
 
     templateDocument.addEventListener("click", (event) => {
       if ((event.target as HTMLElement).closest("a")) {
@@ -632,7 +663,7 @@ export default function MessageEditor({ value, mode, onChange, isTemplate = fals
                 aria-label="Insert recipient name"
                 aria-haspopup="menu"
                 aria-expanded={recipientVariableMenuOpen}
-                onMouseDown={(event) => {
+                onPointerDown={(event) => {
                   event.preventDefault();
                   saveTemplateSelection();
                 }}
@@ -652,7 +683,10 @@ export default function MessageEditor({ value, mode, onChange, isTemplate = fals
                       key={variable.value}
                       type="button"
                       role="menuitem"
-                      onMouseDown={(event) => event.preventDefault()}
+                      onPointerDown={(event) => {
+                        event.preventDefault();
+                        saveTemplateSelection();
+                      }}
                       onClick={() => handleInsertVisualRecipientVariable(variable.value)}
                       className="flex w-full items-center justify-between rounded-md px-2.5 py-2 text-left text-sm text-slate-600 transition-colors hover:bg-rose-50 hover:text-[#8c1d40]"
                     >
@@ -711,14 +745,14 @@ export default function MessageEditor({ value, mode, onChange, isTemplate = fals
             <ToolbarButton label="1. List" title="Numbered list" active={activeFormats.numberedList} onClick={() => runCommand(() => editor?.chain().focus().toggleOrderedList().run() || false)} />
             <ToolbarButton label="Link" title="Add link to selected text" onClick={handleInsertLink} />
             <div className="relative">
-              <button type="button" title="Insert recipient name" aria-label="Insert recipient name" aria-haspopup="menu" aria-expanded={recipientVariableMenuOpen} onMouseDown={(event) => event.preventDefault()} onClick={() => setRecipientVariableMenuOpen((open) => !open)} className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-white hover:text-[#8c1d40]">
+              <button type="button" title="Insert recipient name" aria-label="Insert recipient name" aria-haspopup="menu" aria-expanded={recipientVariableMenuOpen} onPointerDown={(event) => { event.preventDefault(); saveEditorSelection(); }} onClick={() => setRecipientVariableMenuOpen((open) => !open)} className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-white hover:text-[#8c1d40]">
                 <span aria-hidden="true">@</span><span>Recipient name</span>
                 <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" /></svg>
               </button>
               {recipientVariableMenuOpen && (
                 <div className="absolute left-0 top-full z-10 mt-1 min-w-36 rounded-lg border border-slate-200 bg-white p-1 shadow-lg" role="menu">
                   {RECIPIENT_VARIABLES.map((variable) => (
-                    <button key={variable.value} type="button" role="menuitem" onMouseDown={(event) => event.preventDefault()} onClick={() => handleInsertRecipientVariable(variable.value)} className="flex w-full items-center justify-between rounded-md px-2.5 py-2 text-left text-sm text-slate-600 transition-colors hover:bg-rose-50 hover:text-[#8c1d40]">
+                    <button key={variable.value} type="button" role="menuitem" onPointerDown={(event) => { event.preventDefault(); saveEditorSelection(); }} onClick={() => handleInsertRecipientVariable(variable.value)} className="flex w-full items-center justify-between rounded-md px-2.5 py-2 text-left text-sm text-slate-600 transition-colors hover:bg-rose-50 hover:text-[#8c1d40]">
                       <span>{variable.label}</span><code className="ml-3 text-[11px] text-slate-400">{variable.value}</code>
                     </button>
                   ))}
